@@ -14,10 +14,13 @@
 
 ## 읽는 순서 추천
 
-1. `kernel/linux-fundamentals-deep-dive.md` → `kernel/cgroup-deep-dive.md` → `k8s/container-runtime-deep-dive.md`
-2. `k8s/k8s-control-plane-deep-dive.md` → `kernel/network-deep-dive.md` → `kernel/cni-kernel-deep-dive.md`
-3. `hw/gpu-gpudirect-deep-dive.md` → `hw/ceph-storage-deep-dive.md` → `k8s/nvidia-network-operator-deep-dive.md`
-4. `kernel/ebpf-deep-dive.md` → `k8s/observability-deep-dive.md` → `k8s/security-deep-dive.md` → **`integration/dgx-ib-multinode-training-guide.md`**
+전체 커리큘럼은 [../CURRICULUM.md](../CURRICULUM.md) 참고. 요약:
+
+1. **기초** — `kernel/linux-fundamentals` → `kernel/cgroup` → `k8s/container-runtime` → `kernel/network`
+2. **클러스터** — `k8s/k8s-control-plane` → `kernel/cni-kernel`
+3. **HW** — `hw/gpu-gpudirect` → `k8s/nvidia-network-operator` → `hw/nccl-collective` → `hw/cuda-stack` → `hw/ceph-storage` → `hw/parallel-filesystem`
+4. **MLOps 플랫폼** — `k8s/mlops-stack` → `k8s/inference-serving` → `k8s/multi-tenancy-scheduler` → `k8s/authn-authz` → `k8s/security`
+5. **관측/통합** — `kernel/ebpf` → `k8s/observability` → `k8s/logging-pipeline` → `integration/llm-training-workload` → **`integration/dgx-ib-multinode-training-guide.md`** (허브)
 
 ## 운영 원칙
 
