@@ -131,11 +131,352 @@ DGX H100
 
 ---
 
-### 1.5 실제 dgx03 노드 출력 해석 (★ 면접에서 "설명해보세요" 나오면 이걸로)
+### 1.5 실제 dgx03 노드 출력 해석 — 물리에서 논리까지 한 번에
 
-DGX03 노드에서 실제 조회한 결과를 **교과서 그림과 비교**하면서 읽어보자.
+> **읽는 법**: 이 섹션은 **한 장의 ConnectX-7 카드(PCI 0x40)가 물리 → PCI → 커널 → 네이밍 → RDMA → K8s까지 어떻게 "모습을 바꿔가며 올라가는지"** 를 계층별로 추적한다.
+> 하나의 포트(`mlx5_3` = `ibp64s0` = PCI `0000:40:00.0`)를 빨간 실선처럼 따라가며 읽으면 헷갈림이 사라진다.
+>
+> **⚠️ 난이도 주의**: 이 1.5절은 **심화 딥다이브**다. 처음 읽는 독자는 아래 "외우고 갈 것 3개"와 "한 줄 요약"만 보고 §2로 건너뛰어도 된다. 면접 직전 복습 때 다시 돌아와 계층을 하나씩 훑는 용도로 써도 충분.
 
-#### (A) `lspci | grep -i mellanox` — 하드웨어 카드 식별
+---
+
+#### 🗺️ 전체 계층 지도 (먼저 큰 그림)
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  Layer 6: Application   │  PyTorch / NCCL                              │
+│                         │  NCCL_IB_HCA=mlx5_3,mlx5_4,...               │
+├─────────────────────────┼──────────────────────────────────────────────┤
+│  Layer 5: Kubernetes    │  Pod annotation → NAD → Host-Device CNI      │
+│                         │  device: ibp64s0                             │
+├─────────────────────────┼──────────────────────────────────────────────┤
+│  Layer 4: Kernel IFName │  ibp64s0    (net)    ←─┐                    │
+│                         │  mlx5_3     (rdma)   ←─┴─ 같은 HW, 두 이름  │
+├─────────────────────────┼──────────────────────────────────────────────┤
+│  Layer 3: Kernel Driver │  mlx5_core → mlx5_ib → ib_core               │
+│                         │  (verbs, rdma_cm, ib_uverbs)                 │
+├─────────────────────────┼──────────────────────────────────────────────┤
+│  Layer 2: PCIe          │  PCI addr  0000:40:00.0   (bus 0x40)         │
+│                         │  Vendor 15b3  Device MT2910 (ConnectX-7)     │
+├─────────────────────────┼──────────────────────────────────────────────┤
+│  Layer 1: Physical HW   │  ConnectX-7 NIC (QSFP112 포트 1개)           │
+│                         │  └─ 케이블 → IB Switch (400Gbps NDR)         │
+└─────────────────────────┴──────────────────────────────────────────────┘
+          ↑ 아래에서 위로 올라가며 읽을 것 ↑
+```
+
+> **핵심 통찰**: 같은 물리 포트 하나가 **`ibp64s0`(네트워크 관점)**, **`mlx5_3`(RDMA 관점)**, **`0000:40:00.0`(PCI 관점)** 세 이름을 동시에 가진다. 이 셋이 전부 같은 대상을 가리킨다는 것을 머리에 각인하고 읽어야 한다.
+
+---
+
+#### 📐 Layer 1 — 물리 하드웨어 (눈으로 보이는 것)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     DGX H100 섀시 내부                        │
+│                                                              │
+│   GPU0 ─┐      ┌─────── PCIe Gen5 ───────┐                  │
+│   GPU1 ─┤      │                         │                  │
+│   GPU2 ─┤      │   CPU / PCIe Root      │                  │
+│   ...   │      │   Complex (NUMA x2)    │                  │
+│   GPU7 ─┘      └────────┬────────────────┘                  │
+│                         │                                    │
+│    ┌────────────────────┴───────────────────────┐           │
+│    │                                             │           │
+│  [HCA0]  [HCA1]  [HCA2]  [★HCA3]  [HCA4]  ...  [HCA7]      │
+│ ConnectX-7   ConnectX-7   ConnectX-7   ConnectX-7            │
+│  (QSFP112)   (QSFP112)   (QSFP112)   (QSFP112)              │
+│    │           │           │           │                     │
+│    ↓ 케이블    ↓           ↓           ↓                     │
+│  ═══════════════════════════════════════                     │
+│          IB Switch (NVIDIA Quantum-2)                        │
+│              400Gbps NDR × 64 ports                          │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- DGX H100 노드 1대 = **Compute용 ConnectX-7 HCA 8장** + **Storage용 듀얼포트 ConnectX-7 2장** + 온보드 관리 NIC.
+- 케이블은 QSFP112 NDR 400Gbps.
+- 우리가 추적할 대상: **★HCA3** (물리적으로 3번째 Compute NIC).
+
+---
+
+#### 🔌 Layer 2 — PCIe 버스 (커널이 하드웨어를 발견하는 층)
+
+리눅스 커널은 부팅 시 PCI 트리를 스캔해서 하드웨어를 발견한다. `lspci`가 그 결과.
+
+```
+$ lspci | grep -i mellanox | grep -v bridge
+18:00.0 Infiniband controller  [ConnectX-7]  ← HCA0
+29:00.0 Infiniband controller  [ConnectX-7]  ← Storage card #1 (IB 포트, Down)
+29:00.1 Ethernet controller    [ConnectX-7]  ← 같은 카드의 Ethernet 포트
+40:00.0 Infiniband controller  [ConnectX-7]  ← ★ 우리가 추적할 HCA3
+4f:00.0 Infiniband controller  [ConnectX-7]  ← HCA4
+5e:00.0 Infiniband controller  [ConnectX-7]  ← HCA5
+9a:00.0 Infiniband controller  [ConnectX-7]  ← HCA6
+aa:00.0 Infiniband controller  [ConnectX-7]  ← Storage card #2 (IB 포트, Down)
+aa:00.1 Ethernet controller    [ConnectX-7]  ← 같은 카드의 Ethernet 포트
+c0:00.0 Infiniband controller  [ConnectX-7]  ← HCA7
+ce:00.0 Infiniband controller  [ConnectX-7]  ← HCA8
+dc:00.0 Infiniband controller  [ConnectX-7]  ← HCA9
+```
+
+**PCI 주소 `0000:40:00.0` 뜯어보기**:
+```
+  0000       :      40      :     00     .     0
+  ────             ────          ────         ──
+  도메인          버스(bus)     디바이스     함수
+  (대개 0)       (16진수)       (슬롯)     (듀얼포트시 0/1)
+```
+
+**왜 bus 번호가 `18, 29, 40, 4f, 5e, 9a, aa, c0, ce, dc`로 띄엄띄엄?**
+- DGX H100은 NUMA 소켓 2개 + PCIe switch chip 4개(PEX sw)를 거친 트리 구조.
+- 각 PCIe switch 아래에 **GPU와 Compute HCA가 같은 스위치로 페어링** → GPU↔HCA가 CPU root complex를 거치지 않고 PCIe P2P(=GPUDirect RDMA)로 직결.
+- bus 번호 간격이 "이 HCA와 어떤 GPU가 짝인지"를 힌트로 준다.
+- 정확한 페어링은 `nvidia-smi topo -m` 출력의 `PIX`/`PXB`/`SYS` 매트릭스로 확인 (→ [§2.5 GPUDirect RDMA](#25-gpudirect-rdma--gpuhca가-cpu를-건너뛰는-원리)).
+
+**Storage 카드(29:00, aa:00)만 `.0 / .1` function 두 개인 이유**:
+- 단일포트 HCA는 function 0 하나만 노출.
+- 듀얼포트 HCA는 포트별로 독립된 PCI function을 노출 → `.0`(port1)과 `.1`(port2)가 한 카드.
+
+---
+
+#### ⚙️ Layer 3 — 커널 드라이버 (PCI 장치를 RDMA/NET 장치로 승격)
+
+커널은 PCI 장치를 발견하면 맞는 드라이버를 바인딩한다. Mellanox 경우:
+
+```
+   PCI 0000:40:00.0  (하드웨어)
+          │
+          │ kernel probe → driver bind
+          ↓
+   ┌──────────────────────┐
+   │ mlx5_core.ko         │  ← 공통 하드웨어 제어 (레지스터, 인터럽트, DMA)
+   └──────┬───────────┬───┘
+          │           │
+          ↓           ↓
+   ┌─────────────┐  ┌─────────────┐
+   │ mlx5_ib.ko  │  │ mlx5_en (NIC)│
+   │ (IB 모드용) │  │ (Eth 모드용) │
+   └──────┬──────┘  └──────┬───────┘
+          │                │
+          ↓                ↓
+   ┌────────────────────────────────────┐
+   │ ib_core, ib_uverbs, rdma_cm, ib_umad│ ← RDMA subsystem (범용 계층)
+   └────────────────────────────────────┘
+```
+
+**한 HCA가 IB 또는 Ethernet 중 하나로 동작**. Storage 카드의 `.0`은 IB 모드, `.1`은 Ethernet 모드로 **펌웨어 설정**(`mlxconfig LINK_TYPE_P1=IB/ETH`)에 의해 결정됨.
+
+이 Layer 3이 끝나면 `/sys` 파일시스템에 두 종류의 장치가 등장한다:
+- `/sys/class/net/<네트워크 이름>` ← Layer 4-A
+- `/sys/class/infiniband/<RDMA 이름>` ← Layer 4-B
+
+---
+
+#### 🏷️ Layer 4 — 이름이 붙는다 (같은 장치의 두 얼굴)
+
+**같은 PCI 장치 하나가 두 네임스페이스에서 각자 이름을 받는다**:
+
+```
+           PCI 0000:40:00.0  (HCA3)
+                  │
+          ┌───────┴────────┐
+          ↓                ↓
+   ┌──────────────┐  ┌──────────────┐
+   │ /sys/class/  │  │ /sys/class/  │
+   │   net/       │  │   infiniband/│
+   │              │  │              │
+   │  ibp64s0     │  │  mlx5_3      │
+   │              │  │              │
+   └──────┬───────┘  └──────┬───────┘
+          │                  │
+       네트워크 스택         RDMA 스택
+       (ip, ifconfig)       (ibv, rdma)
+       TCP/IP/IPoIB         verbs, QP
+```
+
+##### 4-A. 네트워크 이름 — `ibp64s0`의 정체
+
+systemd가 PCI 주소에서 이름을 자동 생성:
+```
+  ib      p  64    s  0
+  ──      ─  ──    ─  ─
+  │       │  │     │  └─ slot 0
+  │       │  │     └──── slot 접두
+  │       │  └────────── bus 64 (= 0x40)  ★ PCI bus와 일치!
+  │       └───────────── bus 접두 (pci)
+  └──────────────────── link layer: InfiniBand (Ethernet이면 'en')
+```
+
+**핵심**: `ibp64s0`의 숫자 `64`는 PCI bus `0x40`을 10진수로 바꾼 값. → **인터페이스 이름만 보면 PCI 위치가 역산된다**.
+
+##### 4-B. RDMA 이름 — `mlx5_3`의 정체
+
+mlx5 드라이버가 **probe 순서대로 0부터 번호를 붙임**. 그래서 PCI 주소와 1:1로 고정되진 않고, 부팅 시점/커널 버전에 따라 번호가 밀릴 수 있음.
+
+```
+probe 순서    PCI 주소           RDMA 이름
+────────────  ──────────────    ──────────
+     1        0000:18:00.0  →   mlx5_0
+     2        0000:29:00.0  →   mlx5_1
+     3        0000:29:00.1  →   mlx5_2  (같은 카드의 2번 function)
+     4        0000:40:00.0  →   mlx5_3  ★
+     5        0000:4f:00.0  →   mlx5_4
+     ...
+```
+
+##### 두 이름의 매핑 확인
+
+```
+$ ibdev2netdev
+mlx5_3 port 1 ==> ibp64s0 (Up)   ← ★ 이 줄이 두 얼굴을 연결
+```
+
+이 한 줄이 **Layer 4-A와 4-B를 잇는 다리**다.
+
+---
+
+#### 📋 Layer 4.5 — dgx03 전체 매핑 한눈에
+
+| 물리 위치 | PCI | RDMA(mlx5) | Net | 상태 | Rate | 용도 |
+|---|---|---|---|---|---|---|
+| HCA0 | 0000:18:00.0 | mlx5_0 | ibp24s0 | ✅ Active | 400G | Compute GPU0 |
+| Storage#1 port1 | 0000:29:00.0 | mlx5_1 | ibp41s0f0 | ❌ Down | - | Storage IB (미결선) |
+| Storage#1 port2 | 0000:29:00.1 | mlx5_2 | enp41s0f1np1 | ❌ Down | - | Storage Eth (미결선) |
+| **★HCA3** | **0000:40:00.0** | **mlx5_3** | **ibp64s0** | **✅ Active** | **400G** | **Compute GPU1** |
+| HCA4 | 0000:4f:00.0 | mlx5_4 | ibp79s0 | ✅ Active | 400G | Compute GPU2 |
+| HCA5 | 0000:5e:00.0 | mlx5_5 | ibp94s0 | ✅ Active | 400G | Compute GPU3 |
+| HCA6 | 0000:9a:00.0 | mlx5_6 | ibp154s0 | ✅ Active | 400G | Compute GPU4 |
+| Storage#2 port1 | 0000:aa:00.0 | mlx5_7 | ibp170s0f0 | ❌ Down | - | Storage IB (미결선) |
+| Storage#2 port2 | 0000:aa:00.1 | mlx5_8 | enp170s0f1np1 | ❌ Down | - | Storage Eth (미결선) |
+| HCA7 | 0000:c0:00.0 | mlx5_9 | ibp192s0 | ✅ Active | 400G | Compute GPU5 |
+| HCA8 | 0000:ce:00.0 | mlx5_10 | ibp206s0 | ✅ Active | 400G | Compute GPU6 |
+| HCA9 | 0000:dc:00.0 | mlx5_11 | ibp220s0 | ✅ Active | 400G | Compute GPU7 |
+| 온보드NIC0 | - | irdma0 | ens6f0 | ✅ Active | 100G | Mgmt (Intel) |
+| 온보드NIC1 | - | irdma1 | ens6f1 | ❌ Down | - | Mgmt (Intel) |
+
+➡ **Compute Fabric: 8포트 × 400Gbps = 노드당 3.2Tbps IB 대역폭**. NCCL AllReduce가 이 대역을 먹는다.
+
+---
+
+#### 🌐 Layer 5 — IB 패브릭 관점 (케이블 저편에서 이 포트를 어떻게 보는가)
+
+```
+$ ibstat
+CA 'mlx5_3'
+        CA type: MT4129              ← ConnectX-7 모델 ID
+        Firmware version: 28.39.3004
+        Port 1:
+                State: Active
+                Physical state: LinkUp
+                Rate: 400              ← 400Gbps 협상 완료
+                Base lid: 25           ← 이 포트의 주소 (IB 라우팅용)
+                SM lid: 2              ← 패브릭의 Subnet Manager 위치
+                Port GUID: 0x58a2e1030046d3a6  ← 영구 ID (MAC 같은 것)
+                Link layer: InfiniBand
+```
+
+```
+               IB Switch 내부 (Subnet Manager 관점)
+         ┌────────────────────────────────────────┐
+         │  LID Table                             │
+         │  ─────────                             │
+         │   LID  2 → SM 자신                     │
+         │   LID 18 → mlx5_11 (dgx03)             │
+         │   LID 19 → mlx5_6  (dgx03)             │
+         │   LID 20 → mlx5_10 (dgx03)             │
+         │   LID 21 → mlx5_9  (dgx03)             │
+         │   LID 22 → mlx5_5  (dgx03)             │
+         │   LID 23 → mlx5_0  (dgx03)             │
+         │   LID 24 → mlx5_4  (dgx03)             │
+         │   LID 25 → mlx5_3  (dgx03)  ★          │
+         │   LID ... → 다른 노드의 HCA들          │
+         └────────────────────────────────────────┘
+```
+
+- **LID = IB 세계의 IP**. 스위치가 LID로 패킷을 포워딩.
+- **GID = IB 세계의 MAC+IPv6 하이브리드**. 영구 ID.
+- 모든 Active 포트가 같은 `SM lid: 2`를 보고 있다 → 패브릭이 하나의 subnet으로 정상 통합.
+
+---
+
+#### 🎯 Layer 6 — Kubernetes가 이 포트를 어떻게 잡아먹는가
+
+드디어 이 한 포트가 Pod 안까지 도달하는 경로:
+
+```
+ ┌──────────────────────────────────────────────────────────┐
+ │ Pod (slm 팀)                                             │
+ │   metadata:                                              │
+ │     annotations:                                         │
+ │       k8s.v1.cni.cncf.io/networks: ib-ibp64s0-conf-slm   │
+ └──────────────────────┬───────────────────────────────────┘
+                        │ Multus가 annotation 읽음
+                        ↓
+ ┌──────────────────────────────────────────────────────────┐
+ │ NetworkAttachmentDefinition: ib-ibp64s0-conf-slm         │
+ │   spec.config:                                           │
+ │     { "type":"host-device", "device":"ibp64s0", ... }    │
+ └──────────────────────┬───────────────────────────────────┘
+                        │ host-device CNI 호출
+                        ↓
+ ┌──────────────────────────────────────────────────────────┐
+ │ 커널 netlink:                                            │
+ │   ip link set ibp64s0 netns <pod_netns>                  │
+ │   → 호스트에서 사라지고 Pod 안에 net1으로 등장            │
+ │   → RDMA subsystem도 해당 netns로 이동                   │
+ └──────────────────────┬───────────────────────────────────┘
+                        │
+                        ↓
+ ┌──────────────────────────────────────────────────────────┐
+ │ Pod 내부에서:                                            │
+ │   $ ip link                → net1 (= ibp64s0)            │
+ │   $ ibv_devinfo            → mlx5_3                      │
+ │   $ ls /dev/infiniband/    → uverbs3, rdma_cm            │
+ │   $ NCCL_IB_HCA=mlx5_3 python train.py                   │
+ └──────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 🔁 전체 흐름 — 한 번에 역추적
+
+**"NCCL_IB_HCA=mlx5_3"에서 시작해서 IB 케이블까지**:
+
+```
+NCCL_IB_HCA=mlx5_3
+      │
+      ↓ verbs API (ibv_open_device)
+/dev/infiniband/uverbs3 를 mmap
+      │
+      ↓ ib_uverbs → mlx5_ib → mlx5_core
+커널 드라이버가 PCI 0000:40:00.0 제어
+      │
+      ↓ PCIe TLP
+ConnectX-7 하드웨어
+      │
+      ↓ QSFP112 케이블
+IB Switch (LID 25 → 대상 노드의 LID)
+      │
+      ↓ 원격 노드에서 역순
+원격 Pod의 GPU 메모리 (GPUDirect RDMA)
+```
+
+---
+
+#### ✅ 외우고 갈 것 3개
+
+1. **같은 포트 = 세 이름**: `ibp64s0`(net) = `mlx5_3`(rdma) = `0000:40:00.0`(pci). `ibdev2netdev`로 매핑 확인.
+2. **네이밍의 숫자는 PCI bus**: `ibp64s0`의 `64` = PCI bus `0x40` = 10진수 64. 이름만 봐도 PCI 위치가 보임.
+3. **8 Active / 4 Down은 정상**: Compute 8장만 쓰고 Storage용 4장(2 듀얼포트 카드)은 사이트에서 미결선. NCCL은 Active만 명시해야 hang 방지.
+
+#### 한 줄 요약
+
+> **"ConnectX-7 한 장이 `PCI 0000:40:00.0` → 드라이버 mlx5_core/mlx5_ib → RDMA `mlx5_3` / Net `ibp64s0` → NAD `ib-ibp64s0-conf-slm` → Pod의 `net1`로 6개 계층을 거쳐 변신하며, 최종적으로 `NCCL_IB_HCA=mlx5_3`이 이 모든 계층을 한 번에 꿰뚫는 입구다."**
+
+---
+
+#### (부록) 원시 출력 전체 — `lspci` raw (PCI bridge 포함)
 
 ```
 18:00.0 Infiniband controller  [ConnectX-7]
@@ -235,7 +576,7 @@ link mlx5_3/1  subnet_prefix fe80::  lid 25  state ACTIVE  physical_state LINK_U
 ```
 
 **`ibstat`과의 차이**:
-- `rdma link`는 RDMA **subsystem(netlink 기반, netns 인식)** 관점. Namespace isolation을 체크할 때 이걸 씀.
+- `rdma link`는 RDMA **subsystem(netlink 기반)** 관점. **커널 5.3+ & `rdma system set netns exclusive`** 전제에서 netns 인식 가능. 그 이전 커널/공유 모드면 RDMA 디바이스는 host netns에만 존재. Namespace isolation을 체크할 때 이 전제 확인 필수.
 - Ethernet link layer로 설정된 `mlx5_2`, `mlx5_8`에는 `netdev enp...`이 붙음 → RDMA-capable Ethernet(RoCE) 가능성 열려있음.
 - `subnet_prefix fe80::`은 IB의 link-local GID prefix. IPv6 link-local과 형식 공유.
 
@@ -324,6 +665,61 @@ NVIDIA가 만든 GPU 간 통신 라이브러리. AllReduce, AllGather, Broadcast
 
 PyTorch의 `torch.distributed` backend로 `nccl`을 지정하면 NCCL이 동작합니다.
 
+### 2.4 AllReduce 알고리즘 — Ring vs Tree vs NVLS/SHARP
+
+NCCL은 환경에 따라 3가지 AllReduce 구현을 자동 선택한다. 면접에서 "Ring과 Tree 차이"는 단골.
+
+| 알고리즘 | 동작 | 지연 | 대역폭 효율 | 언제 쓰이나 |
+|---|---|---|---|---|
+| **Ring** | N개 노드가 링 모양으로 순차 전달. 각 노드가 `2(N-1)/N` 만큼의 데이터를 send/recv | O(N) | 최대 (이론치 ≈ 링크 대역) | 큰 텐서 / 4~16노드 |
+| **Tree** | 이분트리로 reduce → broadcast. 로그 단계 | O(log N) | Ring보다 낮음 | 작은 텐서 / 많은 노드(>32) |
+| **NVLS** (NVLink SHARP) | NVSwitch가 **노드 내부**에서 하드웨어 reduce | 최저 | 최고 | 단일 DGX 내 (NVLink) |
+| **Collnet/SHARP** | **IB Switch**(Quantum-2)가 **노드 간 reduce를 네트워크에서** 수행 | Ring × ~1/2 | 링크 대역 초과 가능 | 다노드 + Quantum-2 + UFM |
+
+**튜닝 레버**:
+- `NCCL_ALGO=Ring,Tree,CollNet` — 허용 알고리즘 제한
+- `NCCL_PROTO=Simple,LL,LL128` — wire protocol (LL=latency low)
+- `NCCL_COLLNET_ENABLE=1` — SHARP 활성 (UFM + `sharp_am` 필요)
+- `NCCL_NVLS_ENABLE=1` — NVLink SHARP (Hopper+)
+- `NCCL_TOPO_FILE=/etc/nccl-topo.xml` — DGX 레퍼런스 토폴로지 XML 강제. GPU↔HCA 페어링이 런타임 자동탐지와 틀어지면 이걸로 고정.
+
+> **회사 현황**: SHARP는 UFM을 깔아야 쓸 수 있음. 현재 opensm 단독 운영이라 **SHARP 비활성 상태**. 학습 속도 한계가 IB 대역폭에 물리면 UFM+SHARP 도입이 다음 최적화 카드.
+
+### 2.5 GPUDirect RDMA — GPU/HCA가 CPU를 건너뛰는 원리
+
+"RDMA는 커널을 우회한다"의 GPU 버전. HCA가 **GPU의 HBM을 직접 DMA 읽기/쓰기** 한다.
+
+```
+   (일반 경로, 느림)
+   GPU HBM → PCIe → CPU DRAM → PCIe → HCA → IB
+                       ↑
+                   bounce buffer (2 hop, CPU 개입)
+
+   (GPUDirect RDMA)
+   GPU HBM ───── PCIe P2P ────→ HCA → IB
+                 (CPU 안 거침)
+```
+
+**활성화 조건** (한 줄이라도 빠지면 조용히 fallback):
+
+| 조건 | 확인 커맨드 |
+|---|---|
+| `nvidia_peermem` 커널 모듈 로드 (구버전은 `nv_peer_mem`) | `lsmod \| grep peermem` |
+| GPU와 HCA가 **같은 PCIe switch** 하위 (PIX/PXB) | `nvidia-smi topo -m` |
+| **ACS(Access Control Services)** 가 PCIe switch에서 disable | `lspci -vvv \| grep -i acsctl` |
+| HCA의 **BAR1 크기** ≥ 전송 버퍼 | `lspci -vvv -s 40:00.0 \| grep "Memory at.*64-bit"` |
+| MOFED 빌드에 `--with-nvmem` | MOFED 설치 로그 |
+
+**NCCL 로그에서 확인**:
+```
+NCCL INFO GDRCOPY enabled
+NCCL INFO Channel 00 : 0[0] -> 1[0] via P2P/IPC/indirect GDRDMA
+                                                     ^^^^^^
+```
+`GDRDMA`가 안 보이면 CPU 경유 중 → **학습 속도가 IB 대역 대비 30~50% 손실**.
+
+**ACS가 왜 문제?** — PCIe 스펙상 ACS는 루트 컴플렉스를 거쳐 IOMMU 격리하라는 보안 기능. 이게 켜지면 P2P TLP가 CPU로 우회됨. DGX BIOS에서 기본 disable이지만, 일반 서버를 GPU 노드로 쓸 땐 반드시 확인.
+
 ---
 
 ## 3. Kubernetes 기초 (CNI까지)
@@ -342,6 +738,8 @@ Pod에 네트워크를 붙여주는 표준 인터페이스. K8s는 CNI 플러그
 - Flannel, Cilium, Weave 등
 
 기본적으로 **Pod 1개 = 네트워크 인터페이스 1개 (eth0)**.
+
+> CNI가 netns에 인터페이스를 꽂는 커널 레벨 메커니즘(`setns`, netlink, veth pair)은 [cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md) 참조.
 
 ### 3.3 그런데 인터페이스가 1개로는 부족하다
 
@@ -640,6 +1038,9 @@ NVIDIA Network Operator가 설치/관리하는 것들:
 
 수동으로 일일이 설치할 필요 없이 Operator가 알아서 해줍니다.
 
+> **상세**: NicClusterPolicy CR → DaemonSet 배치 → 각 노드 pod으로 펼쳐지는 내부 흐름은 [nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md) 참고.
+> **CNI 커널 내부**: `setns`/netlink/ACS 같은 저수준 이야기는 [cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md).
+
 ---
 
 ## 8. Kubeflow PyTorchJob
@@ -704,7 +1105,7 @@ spec:
 | `NCCL_IB_GID_INDEX` | `3` | RoCEv2 GID 인덱스. 네이티브 IB는 0, RoCE는 3 |
 | `NCCL_IB_TC` | `106` | Traffic Class (QoS 정책) |
 | `NCCL_IB_SL` | `3` | Service Level (Subnet Manager가 SL→VL 매핑) |
-| `NCCL_IB_TIMEOUT` | `22` | 연결 타임아웃 (값 4 = 4*4.096μs * 2^value) |
+| `NCCL_IB_TIMEOUT` | `22` | QP 타임아웃. IB 스펙: `4.096μs × 2^value` → 22면 ≈ 17초. NCCL 기본 18(≈1.07초)은 DGX 멀티노드에서 너무 짧아 retry 폭주 → 22로 상향 |
 
 **반드시 모든 Master/Worker Pod에 동일하게 설정**해야 합니다. 한 Pod만 다르면 통신이 안 맞아 hang 발생.
 
@@ -812,6 +1213,8 @@ Ceph 전용:           모든 노드의 ibp24, ibp220
 
 ### Q2. "왜 SR-IOV가 아니라 Host-Device를 썼나요?"
 > SR-IOV는 HCA 1장을 VF로 쪼개 여러 Pod이 공유할 수 있지만, 설정이 복잡하고 노드별 VF 개수 제약이 있습니다. 우리는 namespace별 격리와 성능을 우선해, 물리 포트를 통째로 할당하는 Host-Device 방식을 선택했습니다. 트레이드오프로 1 Node = 1 Pod = 1 NAD 제약이 생깁니다.
+>
+> **꼬리질문**: *"한 노드 안에서 여러 팀이 동시 학습하려면?"* → 현재 구조론 불가. 대안은 (a) SR-IOV로 VF 분할하되 GPUDirect RDMA 호환 확인, (b) MIG+Host-Device+NAD를 팀별 HCA로 분할, (c) 스케줄러에 `node-exclusive` taint로 팀당 노드 단위 배타 할당. 성능 우선이면 (c), 자원 효율 우선이면 (a).
 
 ### Q3. "PyTorchJob에서 왜 Worker.replicas를 안 늘리고 Worker2, Worker3를 만드나요?"
 > Host-Device CNI는 물리 인터페이스를 Pod 1개가 독점합니다. Worker.replicas=3을 하면 같은 NAD를 가리키는 Pod 3개가 같은 노드에서 같은 IB 포트를 쓰려고 충돌합니다. 그래서 Replica Type을 분리해, K8s 스케줄러가 각각 다른 노드에 배치되도록 유도합니다.
@@ -821,6 +1224,8 @@ Ceph 전용:           모든 노드의 ibp24, ibp220
 
 ### Q5. "AllReduce가 뭔가요?"
 > 분산 학습에서 모든 노드의 gradient를 합산해 평균을 구한 뒤, 그 결과를 모든 노드가 갖도록 동기화하는 collective 통신 연산입니다. 이게 매 step마다 일어나기 때문에 IB 대역폭이 학습 속도에 직접적인 영향을 줍니다.
+>
+> **꼬리질문**: *"Ring과 Tree는 언제 뭘 쓰나?"* → Ring은 큰 텐서·소규모 노드(≤16)에서 대역폭 이론치에 근접. Tree는 노드가 많아질 때(>32) 지연이 O(log N)이라 유리. Quantum-2에 UFM 있으면 **SHARP(CollNet)** 로 스위치에서 in-network reduce → Ring 대비 절반 지연. NCCL이 `NCCL_ALGO`와 토폴로지 감지로 자동 선택하지만, 작은 배치+많은 노드면 `NCCL_ALGO=Tree` 강제가 정답인 경우가 있음.
 
 ### Q6. "NCCL_IB_HCA를 명시하는 이유는?"
 > NCCL이 자동 탐색을 하긴 하지만, 멀티 HCA 환경에서 의도와 다른 HCA를 잡거나 일부만 쓰는 경우가 있습니다. DGX의 8개 HCA를 모두 사용하도록 명시하면 GPU별로 전용 HCA를 통해 통신하게 되어 병목을 최소화합니다.
@@ -829,7 +1234,11 @@ Ceph 전용:           모든 노드의 ibp24, ibp220
 > DCGM은 GPU 전용이라 IB는 못 봅니다. Prometheus + infiniband_exporter로 포트별 rx/tx, 에러 카운터(symbol_error, port_rcv_errors, link_downed)를 수집합니다. ib_write_bw로 노드 간 실측 대역폭을, nccl-tests로 실제 collective 성능을 벤치마크합니다.
 
 ### Q8. "노드 간 통신이 hang 걸리면 어디부터 봐야 하나요?"
-> ① NCCL_DEBUG=INFO 로그에서 IB transport가 잡혔는지 확인 → ② Pod의 net1 인터페이스가 정상 UP 되어 있는지 → ③ /dev/infiniband 디바이스가 마운트 됐는지 → ④ Istio sidecar 주입이 꺼져 있는지 → ⑤ ib_write_bw로 노드 간 직접 IB 통신 가능한지 → ⑥ Subnet Manager가 동작 중인지(opensm).
+> 물리 → 상위 순서로 올라갑니다. ① `ibstat`으로 **SM lid가 0이면 Subnet Manager 죽음 의심**(opensm 상태부터 확인) → ② Active 포트의 `Rate`가 400인지, `port_rcv_errors`/`symbol_error`가 증가 중인지 (`perfquery`) → ③ `ib_write_bw`로 노드 간 베어메탈 실측 → ④ Pod 안에서 `ibv_devinfo`로 HCA 보이는지 / `/dev/infiniband/uverbs*` 마운트 확인 → ⑤ `net1` UP & IP 할당 확인, Istio sidecar 주입 OFF 확인 → ⑥ `NCCL_DEBUG=INFO` 로그에서 IB transport·GDRDMA 선택됐는지, `NCCL_IB_HCA`에 Down HCA 섞여 초기화 hang 아닌지.
+>
+> **꼬리질문 대비**:
+> - *"SM이 이중화 안 돼 있으면?"* → opensm을 최소 2노드에 active/standby로 돌리고 `priority` 차등. Quantum-2면 SM을 스위치에 임베드도 가능.
+> - *"`port_rcv_errors`가 특정 포트만 튀면?"* → 케이블/트랜시버 의심. `ibdiagnet`으로 링크 품질(BER, FEC histogram) 확인 후 케이블 교체.
 
 ---
 
