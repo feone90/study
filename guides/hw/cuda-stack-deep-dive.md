@@ -393,7 +393,24 @@ A. 상향(newer toolkit, older driver)은 **기본 금지**. 하지만 CUDA의 *
 
 ---
 
-## 12. 참고
+## 11.5 2025-2026 최신 키워드 (면접 심화)
+
+- **CDI (Container Device Interface)**: containerd 1.7+/NVIDIA Container Toolkit 1.14+ 이후 OCI hook 대신 CDI spec(`/etc/cdi/nvidia.yaml`) 방식 권장. GPU Operator 24.x 기본값. hook 방식 대비 디버깅/투명성 우수.
+- **Confidential Computing (H100 CC mode)**: H100 + CUDA 12.2+에서 `MIG+CC` 지원. VM 외부(호스트/하이퍼바이저)로부터 GPU 메모리 격리. 금융/의료 멀티테넌트 시 질문 가능.
+- **NVSHMEM / NCCL 2.20+ SHARP v3**: NVLink/IB 초월 collective 최적화. H100+Quantum-2 환경에서 AllReduce 지연 20%↓.
+- **nvidia-persistenced**: 드라이버 persistence mode. 미활성 시 첫 CUDA init 수백 ms 지연 — LLM 서빙 cold start 문제의 숨은 원인.
+- **MIG + vGPU 조합**: vGPU 17.x (2024) 부터 MIG와 결합 가능 — VDI 겸용 클러스터에 유용.
+
+## 12. 연계 문서
+
+- HW/링크 계층: [./gpu-gpudirect-deep-dive.md](./gpu-gpudirect-deep-dive.md), [./nccl-collective-deep-dive.md](./nccl-collective-deep-dive.md)
+- 컨테이너/런타임: [../kernel/container-runtime-deep-dive.md](../kernel/container-runtime-deep-dive.md), [../k8s/nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md)
+- 서빙/관측: [../k8s/inference-serving-deep-dive.md](../k8s/inference-serving-deep-dive.md), [../k8s/observability-deep-dive.md](../k8s/observability-deep-dive.md)
+- 멀티테넌트 스케줄(MIG/MPS 할당): [../k8s/multi-tenancy-scheduler-deep-dive.md](../k8s/multi-tenancy-scheduler-deep-dive.md)
+- 장애 서사(ML-27 과열): [../../interview/ml-platform-ownership-guide.md](../../interview/ml-platform-ownership-guide.md)
+- 허브: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md)
+
+## 13. 참고
 
 - NVML: https://docs.nvidia.com/deploy/nvml-api/
 - DCGM: https://docs.nvidia.com/datacenter/dcgm/latest/

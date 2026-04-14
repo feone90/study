@@ -485,4 +485,17 @@ A. Profile CR 생성 → Profile Controller가 (1) namespace, (2) RoleBinding (n
 - Keycloak: https://www.keycloak.org/documentation
 - Dex: https://dexidp.io/
 - Istio security: https://istio.io/latest/docs/concepts/security/
-- 관련: [security-deep-dive.md](security-deep-dive.md), [mlops-stack-deep-dive.md](mlops-stack-deep-dive.md), [inference-serving-deep-dive.md](inference-serving-deep-dive.md)
+
+### 주의할 실무 디테일
+
+- **Istio 인증서 자동 로테이션**: Citadel/istiod가 24시간 주기로 워크로드 인증서 갱신(기본). `pilot-agent` 재시작 주기와 무관. `istioctl proxy-config secret <pod>` 로 expiry 확인.
+- **kubectl exec / logs는 oauth2-proxy 우회**: apiserver로 직접 가기 때문에 Istio Gateway 정책은 효과 없음. **K8s RBAC + apiserver audit**으로 방어.
+- **audit 연동**: 로그인/권한 실패는 Keycloak events + apiserver audit log(11.3 §audit) 두 계층을 상관분석해야 완전.
+
+## 14. 연계 문서
+
+- 보안 전체(PSS/PSA/Audit/샌드박스): [./security-deep-dive.md](./security-deep-dive.md)
+- mTLS/SPIFFE 원리 복습: [./security-deep-dive.md](./security-deep-dive.md) §11.4
+- K8s RBAC·컨트롤 플레인 흐름: [./k8s-control-plane-deep-dive.md](./k8s-control-plane-deep-dive.md)
+- Kubeflow Profile/MLflow/Harbor OIDC 사용처: [./mlops-stack-deep-dive.md](./mlops-stack-deep-dive.md), [./inference-serving-deep-dive.md](./inference-serving-deep-dive.md)
+- 로그인/audit 이벤트 관측: [./observability-deep-dive.md](./observability-deep-dive.md), [./logging-pipeline-deep-dive.md](./logging-pipeline-deep-dive.md)

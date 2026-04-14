@@ -249,6 +249,18 @@ metadata:
 
 `enforce` 위반 → Pod 생성 거부.
 
+### 6.3.1 PSS vs PSA (표준 vs 강제자)
+
+- **PSS(Pod Security Standards)**: 3단계 프로필 정의(문서/명세).
+- **PSA(Pod Security Admission)**: K8s 1.25부터 내장된 **admission controller**. namespace 라벨(`pod-security.kubernetes.io/enforce|audit|warn`)을 읽어 실제로 차단/감사/경고.
+- PSP(PodSecurityPolicy)는 1.25에서 완전 제거. 더 세밀한 정책이 필요하면 PSA + **Kyverno/OPA Gatekeeper**로 보완.
+
+```bash
+# PSA가 적용됐는지 확인
+kubectl label ns test pod-security.kubernetes.io/enforce=restricted
+kubectl run bad --image=nginx --privileged -n test   # → Forbidden
+```
+
 ### 6.4 restricted 요구사항
 
 - non-root user 실행
@@ -464,6 +476,40 @@ syft myimage:v1 -o spdx-json > sbom.json
 
 ---
 
+## 10.5 샌드박스 런타임 (gVisor / Kata)
+
+보안-민감 워크로드는 "호스트 커널 공유" 자체를 깨는 **샌드박스 런타임**으로 격리 강화.
+
+| 런타임 | 원리 | 오버헤드 | 용도 |
+|--------|------|----------|------|
+| **runc** (기본) | 호스트 커널 공유 | 없음 | 일반 |
+| **gVisor (runsc)** | 유저스페이스 커널(Sentry)이 syscall 가로채 처리 | syscall 2~3배 느림 | 멀티테넌트 SaaS |
+| **Kata Containers** | 경량 VM(QEMU/Firecracker) + 게스트 커널 | 부팅 ~100ms, 메모리 +128MB | 금융/공공 강격리 |
+
+```yaml
+# RuntimeClass로 Pod별 지정
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata: { name: gvisor }
+handler: runsc
+---
+spec:
+  runtimeClassName: gvisor
+```
+
+ML 학습 Pod은 GPU passthrough 때문에 보통 runc 유지, 공용 노트북/평가 서버만 gVisor 적용이 현실적.
+
+## 10.6 공급망 보안 (Supply Chain) — SLSA
+
+**SLSA (Supply-chain Levels for Software Artifacts)**: 빌드 아티팩트의 신뢰도 레벨(L1~L4).
+
+- L1: 빌드 스크립트 문서화
+- L2: 버전 관리된 빌드 + 서명된 provenance
+- L3: 격리된 빌드 환경 + 출처 검증
+- L4: 두 명 리뷰 + 재현 가능 빌드
+
+실무: GitHub Actions + `slsa-github-generator` → **in-toto attestation** → cosign 검증 → admission(Kyverno `verifyImages`)에서 "SLSA L3 이상만 통과".
+
 ## 11. 런타임 보안 (Runtime Security)
 
 ### 11.1 Falco
@@ -499,6 +545,44 @@ spec:
 ```
 
 `runAsNonRoot: true` 없는 Pod 생성 거부.
+
+### 11.3 Audit Logging (`audit.k8s.io/v1`)
+
+kube-apiserver가 **누가 무엇을 요청했는지** 기록. 침해 사고 포렌식 필수.
+
+```yaml
+# /etc/kubernetes/audit-policy.yaml
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+- level: Metadata
+  resources: [{group: "", resources: ["secrets"]}]
+- level: RequestResponse
+  verbs: ["create","update","delete"]
+  resources: [{group: "rbac.authorization.k8s.io", resources: ["*"]}]
+- level: None   # 기타는 기록 안 함
+```
+
+```bash
+kube-apiserver \
+  --audit-policy-file=/etc/kubernetes/audit-policy.yaml \
+  --audit-log-path=/var/log/audit.log \
+  --audit-log-maxage=30
+```
+
+레벨: `None` / `Metadata`(요청자+자원) / `Request`(+요청 body) / `RequestResponse`(+응답 body).
+
+### 11.4 Service Mesh mTLS & SPIFFE
+
+Istio/Linkerd: 사이드카 프록시가 서비스 간 **mTLS 자동 협상**. Pod 신원은 **SPIFFE ID**(`spiffe://cluster.local/ns/prod/sa/api`)로 부여 → 네트워크 계층이 아닌 **워크로드 identity** 기반 접근 제어.
+
+```
+Pod A ──[envoy]── mTLS ──[envoy]── Pod B
+            ↑                   ↑
+      SPIFFE SVID       SPIFFE SVID (X.509)
+```
+
+NetworkPolicy(L4)가 "어디서" 통제라면 mTLS+SPIFFE는 "누가" 통제. 제로트러스트 모델의 기본.
 
 ---
 
@@ -563,6 +647,16 @@ spec:
 
 ---
 
+## 13.5 연계 문서
+
+- 커널 격리 기반: [../kernel/cgroup-deep-dive.md](../kernel/cgroup-deep-dive.md), [../kernel/linux-fundamentals-deep-dive.md](../kernel/linux-fundamentals-deep-dive.md)
+- 런타임: [./container-runtime-deep-dive.md](./container-runtime-deep-dive.md) (CDI, 샌드박스)
+- 네트워크 정책 구현체: [../kernel/cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md), [../kernel/ebpf-deep-dive.md](../kernel/ebpf-deep-dive.md) (Cilium L7)
+- RBAC 원전: [./authn-authz-deep-dive.md](./authn-authz-deep-dive.md), 컨트롤 플레인: [./k8s-control-plane-deep-dive.md](./k8s-control-plane-deep-dive.md)
+- Audit/Falco 로그 수집: [./observability-deep-dive.md](./observability-deep-dive.md)
+
+---
+
 ## 14. 한 줄 요약
 
-> **"컨테이너 보안 = 커널 격리 메커니즘(namespace, capabilities, seccomp, LSM, user ns)을 다층으로 쌓고, K8s 레벨(RBAC, NetworkPolicy, PSS)에서 정책으로 강제하며, 이미지 공급망(스캔, 서명, SBOM)과 런타임 위협 탐지(Falco)로 보완하는 것. 최소 권한 원칙(drop ALL → 필요한 것만 add)이 모든 것의 출발점."**
+> **"컨테이너 보안 = 커널 격리 메커니즘(namespace, capabilities, seccomp, LSM, user ns)을 다층으로 쌓고, K8s 레벨(PSS/PSA, RBAC, NetworkPolicy, Audit)에서 정책으로 강제하며, 이미지 공급망(스캔, 서명, SBOM, SLSA)과 런타임 위협 탐지(Falco)·mTLS(SPIFFE)로 보완하는 것. 최소 권한 원칙(drop ALL → 필요한 것만 add)이 모든 것의 출발점."**

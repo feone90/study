@@ -408,7 +408,23 @@ A. (1) loss scale 확인 (FP16이면). (2) grad norm 로그 — 폭주 지점. (
 
 ---
 
-## 15. 참고
+## 14.5 2025-2026 최신 키워드 (면접 심화)
+
+- **Context Parallel (CP, Ring Attention)**: 긴 시퀀스(128k~1M)를 시퀀스 차원으로 분할. AllGather KV. Megatron-LM 0.7+, DeepSpeed Ulysses.
+- **FP4 / MXFP8 (Blackwell)**: B200/GB200 Transformer Engine 2세대. H100 FP8 대비 2x.
+- **torch.compile + FSDP2**: PyTorch 2.4+ per-parameter sharding (FSDP2). graph 컴파일 호환성↑.
+- **DeepSpeed Ulysses / Liger-Kernel**: 긴 시퀀스 + 커스텀 커널로 70B-class 학습 비용↓.
+- **Checkpoint Engine (Nebula / DCP async)**: GPU→host pinned→NVMe staging, IO와 compute 오버랩.
+
+## 15. 연계 문서
+
+- HW/통신: [../hw/nccl-collective-deep-dive.md](../hw/nccl-collective-deep-dive.md), [../hw/cuda-stack-deep-dive.md](../hw/cuda-stack-deep-dive.md), [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md)
+- 스토리지: [../hw/parallel-filesystem-deep-dive.md](../hw/parallel-filesystem-deep-dive.md), [../hw/ceph-storage-deep-dive.md](../hw/ceph-storage-deep-dive.md)
+- K8s 운영: [../k8s/mlops-stack-deep-dive.md](../k8s/mlops-stack-deep-dive.md), [../k8s/multi-tenancy-scheduler-deep-dive.md](../k8s/multi-tenancy-scheduler-deep-dive.md), [../k8s/observability-deep-dive.md](../k8s/observability-deep-dive.md)
+- 커널 자원: [../kernel/cgroup-deep-dive.md](../kernel/cgroup-deep-dive.md), [../kernel/rdma-ib-deep-dive.md](../kernel/rdma-ib-deep-dive.md)
+- 허브·서사: [./dgx-ib-multinode-training-guide.md](./dgx-ib-multinode-training-guide.md), [../../interview/ml-platform-ownership-guide.md](../../interview/ml-platform-ownership-guide.md)
+
+## 16. 참고
 
 - FSDP: https://pytorch.org/docs/stable/fsdp.html
 - DeepSpeed ZeRO: https://www.deepspeed.ai/tutorials/zero/

@@ -158,7 +158,38 @@ pids.max = 100   # 이 cgroup 안의 프로세스 수 제한
 
 fork bomb 방어용.
 
-### 4.5 디바이스, 네트워크 등
+### 4.5 cpuset (★ K8s CPU Manager)
+
+| 파일 (v2) | 의미 |
+|----------|------|
+| `cpuset.cpus` | 이 cgroup이 쓸 수 있는 CPU 리스트 (예: `0-7,16-23`) |
+| `cpuset.mems` | 쓸 수 있는 NUMA 노드 |
+
+- `kubelet --cpu-manager-policy=static` + Guaranteed Pod + 정수 CPU → 해당 Pod cgroup에 `cpuset.cpus`로 전용 코어 할당.
+- Topology Manager와 결합해 GPU/NIC NUMA alignment.
+
+### 4.6 rdma (★ DGX 관심)
+
+```
+/sys/fs/cgroup/<grp>/rdma.max
+mlx5_0 hca_handle=16 hca_object=16384
+```
+
+RDMA QP/PD 등 객체 수 제한. 공유 HCA에서 QP 고갈로 이웃 Pod 실패 방지.
+
+### 4.7 PSI (Pressure Stall Information) — v2 진단 필수
+
+```bash
+cat /sys/fs/cgroup/my-pod/memory.pressure
+# some avg10=5.23 avg60=3.11 avg300=1.50 total=...
+# full avg10=0.42 ...
+```
+
+- `some`: 하나 이상의 task가 리소스 대기 중인 시간 비율
+- `full`: 모든 task가 stall된 시간 비율 (cpu.pressure에는 full 없음)
+- `cpu.stat throttled_usec`보다 정밀. node-exporter PSI collector로 노출.
+
+### 4.8 디바이스, 네트워크 등
 
 - `devices` - 어떤 디바이스 파일 접근 가능한지
 - 네트워크는 cgroup이 아니라 **tc (traffic control)** 등으로 처리
@@ -433,6 +464,15 @@ resources:
 
 ### Q5. "QoS 클래스가 왜 중요한가요?"
 > "노드 메모리가 부족하면 kubelet이 Pod을 evict하는데, BestEffort → Burstable → Guaranteed 순으로 죽입니다. 핵심 워크로드는 Guaranteed로 두어야 살아남습니다. requests = limits로 설정하면 Guaranteed가 됩니다."
+
+---
+
+## 11.5 연계 문서
+
+- 직전: [linux-fundamentals-deep-dive.md](linux-fundamentals-deep-dive.md) — OOM Killer 원리, QoS와 `oom_score_adj`.
+- 다음: [../k8s/container-runtime-deep-dive.md](../k8s/container-runtime-deep-dive.md) — containerd가 cgroupfs/systemd driver로 cgroup을 실제 만드는 경로.
+- [../k8s/multi-tenancy-scheduler-deep-dive.md](../k8s/multi-tenancy-scheduler-deep-dive.md) — ResourceQuota/Kueue가 requests/limits에 어떻게 묶이는지.
+- [../k8s/security-deep-dive.md](../k8s/security-deep-dive.md) — cgroup은 격리가 아닌 "한도" 메커니즘임을 구분.
 
 ---
 

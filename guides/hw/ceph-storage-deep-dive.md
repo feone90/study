@@ -172,6 +172,30 @@ Ceph의 **핵심 엔진**. 모든 데이터(파일이든 블록이든)는 결국
 - 디스크 1개당 OSD 1개가 일반적
 - 50대 서버 × 디스크 12개 = OSD 600개 같은 스케일도 가능
 
+### 4.25 BlueStore (OSD 스토리지 엔진)
+
+과거: FileStore (XFS 위에 저장 → double write + 파일시스템 오버헤드).
+현재 표준: **BlueStore** (raw block device에 직접 기록).
+
+```
+[BlueStore OSD]
+├── data device: 대용량 HDD/SSD (객체 데이터)
+├── WAL: 작은 NVMe (write-ahead log, 동기화용)
+└── DB: NVMe (RocksDB 메타데이터)
+```
+
+- WAL/DB를 빠른 NVMe로 분리하면 small write 성능 대폭 상승.
+- `ceph-volume lvm batch --data /dev/sdb --db-devices /dev/nvme0n1`.
+
+### 4.26 Scrub / Deep-scrub
+
+데이터 무결성 검증 백그라운드 작업.
+
+- **scrub** (매일): 객체 크기/메타 비교.
+- **deep-scrub** (주 1회 기본): 실제 데이터 바이트 체크섬 비교.
+- 운영 시 peak 시간 피해 window 설정: `osd_scrub_begin_hour`, `osd_scrub_load_threshold`.
+- scrub 중 client IO latency 증가 → ML 체크포인트 저장 타임과 겹치지 않게.
+
 ### 4.3 MON (Monitor)
 
 - 클러스터의 **상태 정보(map)** 관리
@@ -356,6 +380,27 @@ ReadWriteMany (RWX) 가능 → 여러 Pod이 같은 PVC 공유.
 
 **용도**: 학습 데이터셋 공유, 여러 학습 잡이 같은 데이터 읽기.
 
+### 8.3 MDS CAP & D-state 장애 패턴 (★ ML-25 연결)
+
+MDS는 클라이언트에게 **capability (CAP)** 를 발급해 로컬 캐시/쓰기 권한을 위임.
+
+- MDS 부하↑ 또는 metadata 일관성 회복 시 CAP recall → 응답 없는 클라이언트는 블랙리스트.
+- 블랙리스트된 클라이언트의 Pod은 커널 레벨에서 IO가 영원히 블록 → **D-state (uninterruptible sleep)** → `kill -9`도 안 먹음.
+- 해결: 클라이언트 노드 재부팅 또는 `ceph osd blocklist rm <client>` + `umount -f`.
+- 예방: `multi-active MDS` (rank 여러 개), `mds_cache_memory_limit` 여유, 클라이언트 커널 최신화.
+
+### 8.4 multi-active MDS
+
+MDS를 rank 0/1/2… 로 subtree 기반 분할 → 메타 부하 스케일 아웃.
+
+```bash
+ceph fs set cephfs max_mds 3
+```
+
+### 8.5 CSI fencing
+
+CephFS Pod이 노드 장애로 stuck 시, CSI가 다른 노드에서 재마운트하려면 **이전 클라이언트 블랙리스트** 필요 → Ceph-CSI의 `fencing.csi.ceph.com` VolumeAttachment 사용.
+
 ---
 
 ## 9. RGW (S3 호환 오브젝트 스토리지)
@@ -512,6 +557,35 @@ ceph health detail
 
 ### Q5. "CSI 드라이버는 정확히 뭘 하나요?"
 > "K8s가 외부 스토리지 시스템과 통신하는 표준 인터페이스입니다. PVC가 생성되면 ceph-csi가 ProvisionVolume을 호출해 Ceph에 RBD 이미지를 만들고, Pod이 스케줄되면 NodeStageVolume/NodePublishVolume으로 노드에 RBD를 매핑하고 Pod 안에 마운트합니다."
+
+---
+
+## 13.5 Rook (K8s에서 Ceph 자체 배포)
+
+Ceph 클러스터를 K8s Operator로 배포/운영:
+
+```yaml
+apiVersion: ceph.rook.io/v1
+kind: CephCluster
+spec:
+  mon: { count: 3 }
+  storage:
+    useAllNodes: true
+    useAllDevices: true
+```
+
+- 회사처럼 외부 물리 Ceph 클러스터 + CSI만 쓰는 구성과 대비되는 접근.
+- Rook은 "K8s 안에서 OSD도 Pod"이라 HCI(Hyperconverged) 환경에 적합.
+
+---
+
+## 13.6 연계 문서
+
+- 파일시스템 공통 원리: [../kernel/linux-fundamentals-deep-dive.md](../kernel/linux-fundamentals-deep-dive.md) §11 (IO 스케줄러), [cuda-stack-deep-dive.md](cuda-stack-deep-dive.md) (GPUDirect Storage).
+- 대규모 대안: [parallel-filesystem-deep-dive.md](parallel-filesystem-deep-dive.md) — Lustre/Weka/GPFS 비교.
+- K8s CSI / StorageClass: [../k8s/k8s-control-plane-deep-dive.md](../k8s/k8s-control-plane-deep-dive.md).
+- IB+RDMA 경로: [gpu-gpudirect-deep-dive.md](gpu-gpudirect-deep-dive.md), [../k8s/nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md).
+- 운영 사례(ML-25): [../../interview/ml-platform-ownership-guide.md](../../interview/ml-platform-ownership-guide.md).
 
 ---
 

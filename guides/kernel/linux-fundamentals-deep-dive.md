@@ -243,7 +243,12 @@ K8s가 Pod 종료 시:
 
 ### 5.1 가상 메모리
 
-각 프로세스는 자기만의 가상 주소 공간을 가짐 (이전 32-bit 4GB, 64-bit 256TB).
+각 프로세스는 자기만의 가상 주소 공간을 가짐.
+
+- 32-bit: 4GB (유저 3GB + 커널 1GB, 일반적 split)
+- 64-bit x86_64 (4-level paging): 유저 128TB + 커널 128TB
+- 64-bit x86_64 (5-level paging, 커널 4.14+, `la57`): 유저 64PB
+- ARM64도 비슷하며 `CONFIG_ARM64_VA_BITS`로 결정
 
 ```
 [프로세스 가상 주소]
@@ -295,6 +300,34 @@ echo 1024 > /proc/sys/vm/nr_hugepages
 ```
 
 DB, GPU/RDMA 워크로드에서 TLB miss 줄여서 성능 향상. NCCL, RDMA가 활용.
+
+### 5.6 THP (Transparent Huge Pages)
+
+```bash
+cat /sys/kernel/mm/transparent_hugepage/enabled
+# [always] madvise never
+```
+
+커널이 투명하게 2MB로 묶어주는 기능. 장점: 앱 수정 없이 TLB hit 향상.
+단점: **RDMA/DPDK/DB(Redis, MongoDB) 환경에선 잠재적 지연 스파이크** (khugepaged 압축, memory fragmentation).
+→ DGX/GPU 노드는 보통 `madvise` 또는 `never`로 설정하고, 명시적 HugePages만 사용.
+
+### 5.7 OOM Killer
+
+물리 메모리 + swap 모두 고갈 시 커널이 프로세스를 죽여 시스템 보호.
+
+```bash
+# 각 프로세스의 OOM 점수 (높을수록 먼저 죽음)
+cat /proc/1234/oom_score
+cat /proc/1234/oom_score_adj   # -1000 ~ +1000, 사람이 조정
+
+# OOM 절대 보호 (init/핵심 데몬)
+echo -1000 > /proc/1234/oom_score_adj
+```
+
+- kubelet은 Pod QoS(Guaranteed / Burstable / BestEffort)에 따라 `oom_score_adj` 자동 설정 → BestEffort가 먼저 죽음.
+- cgroup v2는 `memory.oom.group=1`이면 컨테이너 내 **전체 프로세스가 한 번에** 죽음 (좀비 방지).
+- 진단: `dmesg | grep -i "killed process"` 또는 `journalctl -k`.
 
 ---
 
@@ -667,6 +700,15 @@ cat /proc/sys/fs/file-max
 
 ### Q6. "strace로 디버깅한 경험을 말해보세요."
 > "예: 'API 응답이 가끔 5초 걸린다' 이슈에서, strace로 해당 프로세스를 attach 했더니 connect() syscall이 3초간 block되는 게 보였습니다. DNS 해석 실패로 fallback 서버를 시도하면서 timeout이 누적된 것이 원인이었습니다. 코드 변경 없이 시스템 콜 레벨에서 봤기 때문에 빠르게 잡았습니다." (자기 경험으로 대체 가능)
+
+---
+
+## 14.5 연계 문서
+
+- 다음 단계: [cgroup-deep-dive.md](cgroup-deep-dive.md) — 여기서 본 `systemd-cgls`, `MemoryMax`가 어떻게 리소스 격리로 이어지는지.
+- 네트워크 튜닝 상세: [network-deep-dive.md](network-deep-dive.md) — `sysctl net.core.*`, GSO/TSO, RPS/RSS 커널 경로.
+- RDMA memlock·HugePages가 실제 NCCL에 어떻게 쓰이는지: [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md), [../hw/nccl-collective-deep-dive.md](../hw/nccl-collective-deep-dive.md).
+- 회사 통합 시나리오: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md).
 
 ---
 

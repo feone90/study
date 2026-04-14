@@ -166,6 +166,28 @@ DGX H100: NVSwitch 4개 = total 7.2 TB/s 양방향
 
 → 노드 안의 GPU 8개가 **같은 보드인 것처럼** 통신.
 
+### 3.35 NVLink SHARP (NVLS) — H100+ 노드 내 inline reduction
+
+NVSwitch 3세대부터 switch 자체에 ALU 탑재 → AllReduce를 switch 안에서 수행, GPU로 결과만 보냄.
+
+```
+기존 Ring AllReduce: 2(N-1)/N × data 만큼 GPU→GPU 전송
+NVLS Reduce: switch가 합산, GPU는 send 1회 + receive 1회
+→ 작은 메시지에서 특히 유리
+```
+
+NCCL 2.17+가 자동 감지 → `NCCL_DEBUG=INFO`에 `NVLS`로 노출. `NCCL_ALGO=NVLS,NVLSTree,Ring,Tree`로 우선순위 제어.
+
+### 3.36 nv-fabricmanager
+
+NVSwitch 구성/감시 데몬. DGX 부팅 시 systemd service로 실행.
+
+```bash
+systemctl status nvidia-fabricmanager
+# 죽으면 NVLink가 안 올라오고 nvidia-smi는 되지만 NCCL 통신 실패.
+journalctl -u nvidia-fabricmanager
+```
+
 ### 3.4 NVLink의 한계와 IB의 역할
 
 NVLink는 **노드 안에서만** 동작.
@@ -210,6 +232,12 @@ GPU0─NVLink─GPU1        GPU0─NVLink─GPU1
 - IB NIC이 GPUDirect 지원 (Mellanox ConnectX-5 이상)
 
 NCCL이 자동으로 활용 → AllReduce가 진짜 빠른 이유.
+
+**추가 전제 (운영 함정)**:
+
+- **PCIe ACS (Access Control Services) OFF**: PCIe switch가 P2P 트래픽을 CPU root로 보내버리면 GPUDirect 실패. BIOS 또는 `setpci`로 ACS 비활성화. NVIDIA GPU Operator가 자동 처리하나 DGX-OS 커스텀 BIOS 주의.
+- **ATS (Address Translation Services)**: IOMMU on 환경에서 NIC이 IOVA → PA 번역 캐시 사용. 꺼져 있으면 성능 저하.
+- **Relaxed Ordering**: PCIe 설정 `lspci -vvv | grep RlxdOrd+` — 켜져 있어야 DMA throughput 최대.
 
 ### 4.3 GPUDirect Storage
 
@@ -513,6 +541,16 @@ GPU Operator 배포 시 자동 설치되는 것들:
 
 ### Q5. "NCCL 통신이 느립니다. 어떻게 진단하나요?"
 > "먼저 NCCL_DEBUG=INFO로 IB transport가 잡혔는지, GPUDirect가 활성화됐는지 확인합니다. 그다음 nccl-tests의 all_reduce_perf로 실측 대역폭을 봅니다. 노드 간이 느리면 IB 쪽: ib_write_bw, infiniband_exporter 메트릭(에러 카운터, 대역폭)을 확인. 노드 내가 느리면 nvidia-smi topo로 NVLink가 제대로 잡혔는지 봅니다."
+
+---
+
+## 13.5 연계 문서
+
+- 드라이버/XID/MIG 상세: [cuda-stack-deep-dive.md](cuda-stack-deep-dive.md).
+- Collective 알고리즘/튜닝: [nccl-collective-deep-dive.md](nccl-collective-deep-dive.md).
+- IB NIC 배포(NicClusterPolicy, MOFED): [../k8s/nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md).
+- Pod에 RDMA/GPU 주입 경로: [../kernel/cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md).
+- 통합 허브: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md).
 
 ---
 

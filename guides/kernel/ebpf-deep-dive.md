@@ -331,6 +331,27 @@ eBPF 프로그램은 커널 자료구조(struct task_struct 등)를 참조.
 
 ---
 
+## 7.5 sched_ext — eBPF로 스케줄러 교체 (커널 6.12+)
+
+2024년 메인라인에 머지된 **sched_ext (SCX)**: 리눅스 CPU 스케줄러 자체를 eBPF 프로그램으로 대체 가능.
+
+- 기존엔 커널 재컴파일로만 가능했던 스케줄러 실험이 **런타임 교체**로 가능해짐
+- 대표 구현: `scx_rusty`(Meta), `scx_lavd`(게이밍 저지연), `scx_bpfland`
+- 쓰는 순간: ML 학습 노드에서 **GPU 보조 CPU 스레드 우선 스케줄**, 노이즈 이웃 격리 등 커스텀 정책 실험
+
+```bash
+# 현재 스케줄러 확인
+cat /sys/kernel/sched_ext/state    # enabled/disabled
+cat /sys/kernel/sched_ext/root/ops # 로드된 eBPF 스케줄러 이름
+```
+
+면접 포인트: "CFS/EEVDF는 범용이라 ML 워크로드엔 suboptimal일 수 있다. sched_ext로 워크로드 특화 스케줄러를 안전하게 실험할 수 있게 됐다."
+
+## 7.6 tail call & bpf_trampoline
+
+- **tail call**: eBPF 프로그램이 다른 eBPF 프로그램으로 점프(스택 재사용). 프로그램 크기 제한(1M instr)을 우회하는 수단.
+- **bpf_trampoline (fentry/fexit)**: kprobe보다 빠른 함수 진입/종료 훅. Cilium이 kube-proxy 대체할 때 사용.
+
 ## 8. K8s에서 eBPF 적용 시나리오
 
 ### 8.1 Cilium으로 CNI 교체
@@ -446,6 +467,15 @@ sudo bpftrace -e '
 
 ### Q5. "RDMA 환경에서 eBPF 한계는?"
 > "RDMA는 커널 네트워크 스택을 우회하므로 eBPF가 그 트래픽을 못 봅니다. eBPF는 커널 hook 지점에서만 동작하는데, RDMA 패킷은 NIC이 직접 GPU/유저 메모리로 DMA합니다. 그래서 IB 트래픽 모니터링은 infiniband_exporter나 NIC 카운터로, eBPF는 일반 이더넷 영역(eth0)과 syscall 수준 관측에 활용해야 합니다."
+
+---
+
+## 11.5 연계 문서
+
+- CNI/네트워크 경로: [./cni-kernel-deep-dive.md](./cni-kernel-deep-dive.md), [./network-deep-dive.md](./network-deep-dive.md)
+- 커널 기반 개념: [./linux-fundamentals-deep-dive.md](./linux-fundamentals-deep-dive.md), [./cgroup-deep-dive.md](./cgroup-deep-dive.md)
+- 보안 활용: [../k8s/security-deep-dive.md](../k8s/security-deep-dive.md) (Falco/Tetragon)
+- 관측 활용: [../k8s/observability-deep-dive.md](../k8s/observability-deep-dive.md) (Hubble/Pixie/Pyroscope)
 
 ---
 

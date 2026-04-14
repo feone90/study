@@ -479,6 +479,40 @@ ls /etc/containerd/config.toml
 - 베이스: `nvcr.io/nvidia/pytorch:xx.xx-py3` (NVIDIA 공식)
 - 캐싱 잘 활용해야 빌드 시간 단축
 
+### 11.4 이미지 GC (DGX 운영 필수)
+
+5~15GB 이미지를 여러 버전 태깅하면 `/var/lib/containerd`가 급속히 참. kubelet 자동 GC:
+
+```
+--image-gc-high-threshold=85  # 85% 차면 GC 시작
+--image-gc-low-threshold=80   # 80% 까지 비움
+--minimum-image-ttl-duration=2m
+```
+
+수동: `crictl rmi --prune` 또는 `ctr -n k8s.io images prune`.
+Harbor에도 **tag retention policy** 걸어야 무한히 쌓이지 않음.
+
+### 11.5 CDI (Container Device Interface, K8s 1.28+ stable)
+
+기존 NVIDIA device plugin + prestart hook의 한계(런타임 종속, multi-vendor 어려움)를 해소.
+
+```yaml
+# /etc/cdi/nvidia.yaml (GPU Operator가 자동 생성)
+cdiVersion: 0.6.0
+kind: nvidia.com/gpu
+devices:
+  - name: "0"
+    containerEdits:
+      deviceNodes:
+        - path: /dev/nvidia0
+      mounts:
+        - hostPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535
+          containerPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535
+```
+
+containerd가 `CDIDevices` 필드로 직접 인식 → prestart hook 불필요.
+회사 환경 확인: `crictl info | grep cdi` 또는 containerd config `enable_cdi = true`.
+
 ---
 
 ## 12. 면접 예상 질문
@@ -497,6 +531,15 @@ ls /etc/containerd/config.toml
 
 ### Q5. "이미지 빌드 캐싱은 어떻게 효율화하나요?"
 > "Dockerfile은 위에서 아래로 레이어가 캐시되고, 변경되면 그 아래 모두 무효화됩니다. 자주 바뀌지 않는 것(시스템 패키지 설치, 의존성 install)을 위에 두고, 자주 바뀌는 소스 코드 COPY를 마지막에 둬야 합니다. multi-stage build로 빌드 도구를 최종 이미지에서 제거하고, .dockerignore로 불필요한 파일 제외도 중요합니다."
+
+---
+
+## 12.5 연계 문서
+
+- 선행: [../kernel/linux-fundamentals-deep-dive.md](../kernel/linux-fundamentals-deep-dive.md), [../kernel/cgroup-deep-dive.md](../kernel/cgroup-deep-dive.md).
+- 보안 관점: [security-deep-dive.md](security-deep-dive.md) — capabilities drop, seccomp, user namespace.
+- GPU 디바이스 주입 상세: [../hw/cuda-stack-deep-dive.md](../hw/cuda-stack-deep-dive.md), [nvidia-network-operator-deep-dive.md](nvidia-network-operator-deep-dive.md).
+- Pod 생성 이후 네트워크 연결: [../kernel/cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md).
 
 ---
 

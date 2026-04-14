@@ -254,6 +254,13 @@ RoCEv2: UDP/IP 위 (라우팅 가능)
 
 NCCL의 `NCCL_IB_GID_INDEX=3`이 RoCE 환경 설정.
 
+**lossless 이더넷을 위한 3종 세트**:
+
+- **PFC (Priority Flow Control, 802.1Qbb)**: 특정 traffic class를 버퍼 full 시 pause 프레임으로 일시 정지
+- **ECN (Explicit Congestion Notification)**: 스위치가 congestion 시 패킷에 마킹 → 송신자가 rate down
+- **DCQCN**: PFC+ECN 결합한 RoCE용 혼잡제어 알고리즘
+→ 이 중 하나라도 mis-config면 pause storm/HoL blocking 발생. `ethtool -S` 에서 pause counter 확인.
+
 ### 5.3 IB Subnet Manager (opensm)
 
 InfiniBand는 BGP 같은 게 없음. 대신 **중앙 집중식 SM**이 모든 경로 결정.
@@ -281,7 +288,27 @@ opensm 죽으면 새 연결은 못 만들지만 기존은 유지. 보통 redunda
 
 ## 6. Service & 로드밸런싱
 
-### 6.1 ClusterIP
+### 6.0 kube-proxy 모드 (iptables vs IPVS vs eBPF)
+
+| 모드 | 구현 | 매칭 복잡도 | 확장성 | 비고 |
+|---|---|---|---|---|
+| **iptables** | netfilter chain | O(n) linear | Service 1000개+에서 느림 | 기본값 |
+| **IPVS** | 커널 IPVS (hash) | O(1) | 대규모 클러스터 적합 | `--proxy-mode=ipvs` |
+| **eBPF (Cilium)** | eBPF map | O(1) | kube-proxy 자체 대체 | conntrack 오프로드 |
+
+### 6.1 conntrack (netfilter) — 운영 필수
+
+K8s Service는 NAT → 커널 `nf_conntrack` 테이블에 세션 기록.
+
+```bash
+cat /proc/sys/net/nf_conntrack_max       # 최대 엔트리
+cat /proc/net/nf_conntrack | wc -l       # 현재
+# 초과 시 dmesg에 "nf_conntrack: table full, dropping packet"
+```
+
+대규모 Service/요청 환경에서 자주 병목 → `nf_conntrack_max = 1M+`, `nf_conntrack_tcp_timeout_established` 단축.
+
+### 6.2 ClusterIP
 
 ```yaml
 spec:
@@ -459,6 +486,15 @@ perfquery             # 포트 카운터
 
 ### Q6. "CoreDNS가 느리거나 응답 안 함?"
 > "CoreDNS Pod 상태와 메트릭(요청 수, 실패율) 확인. 흔한 원인: ndots 설정으로 검색 도메인 5개 시도하다 느려짐 (Pod의 /etc/resolv.conf), upstream DNS 응답 느림, CoreDNS Pod 자체 자원 부족. autopath 플러그인 활성화나 NodeLocal DNSCache 도입으로 해결합니다."
+
+---
+
+## 10.5 연계 문서
+
+- sysctl/IRQ 튜닝: [linux-fundamentals-deep-dive.md](linux-fundamentals-deep-dive.md) §7, §10.
+- Pod 네트워크 namespace 생성: [cni-kernel-deep-dive.md](cni-kernel-deep-dive.md).
+- RDMA + IB NDR 물리/드라이버: [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md), [../k8s/nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md).
+- 가속 데이터패스: [ebpf-deep-dive.md](ebpf-deep-dive.md) (Cilium kube-proxy 대체).
 
 ---
 

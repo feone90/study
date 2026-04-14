@@ -342,7 +342,24 @@ A. 안 그렇다. MDS 단일 active, HDD tail latency, 체크포인트 bandwidth
 
 ---
 
-## 13. 참고
+## 12.5 2025-2026 최신 키워드 (면접 심화)
+
+- **DAOS (Distributed Asynchronous Object Storage)**: Intel/HPE 주도 NVMe-class PMem 타깃. Aurora/Leonardo HPC 채택.
+- **NVIDIA GPUDirect Storage (GDS / cuFile)**: NVMe/IB에서 GPU 메모리로 **CPU bounce 없이** 직접 로드. PyTorch Data Loader + DALI 경로.
+- **Lustre 2.15 LTS**: PFL(Progressive File Layout), DoM(Data-on-MDT) — 작은 파일 MDS에 상주시켜 CephFS 고민 일부 해소.
+- **VAST Data / DDN EXAScaler AI400X2**: H100 레퍼런스 GPU 스토리지. Weka 경쟁사.
+- **S3 over RDMA (WebObject)**: MinIO/Ceph RGW에서 RDMA transport 실험. Artifact I/O 가속.
+
+## 13. 연계 문서
+
+- HW 기반: [./gpu-gpudirect-deep-dive.md](./gpu-gpudirect-deep-dive.md), [./ceph-storage-deep-dive.md](./ceph-storage-deep-dive.md)
+- 커널 계층: [../kernel/rdma-ib-deep-dive.md](../kernel/rdma-ib-deep-dive.md)
+- K8s CSI/CNI: [../k8s/cni-multus-deep-dive.md](../k8s/cni-multus-deep-dive.md)
+- 학습 I/O 서사: [../integration/llm-training-workload-deep-dive.md](../integration/llm-training-workload-deep-dive.md), [../k8s/mlops-stack-deep-dive.md](../k8s/mlops-stack-deep-dive.md)
+- 장애 서사(ML-25 CAP): [../../interview/ml-platform-ownership-guide.md](../../interview/ml-platform-ownership-guide.md)
+- 허브: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md)
+
+## 14. 참고
 
 - Lustre manual: https://doc.lustre.org/
 - Weka docs: https://docs.weka.io/

@@ -451,6 +451,37 @@ kubectl logs -n nvidia-network-operator ds/sriov-device-plugin
 
 ## 8. 커널 레벨 백그라운드 (보너스)
 
+### rdma-cni (network-operator 포함)
+
+Host-Device CNI가 link는 이동시키지만 리눅스 **RDMA subsystem device**는 별도 객체 → `rdma-cni`가 이를 같은 netns로 이동.
+
+```bash
+# 호스트
+rdma system show
+# netns exclusive
+
+# Pod 내부
+rdma link
+# link mlx5_3/1 state ACTIVE ...
+```
+
+`rdma system set netns exclusive` 전제 커널: 5.3+. `shared` 모드면 모든 namespace가 같은 RDMA 디바이스 공유 → 격리 없음.
+
+### 펌웨어 (Operator 범위 밖)
+
+MOFED ≠ 펌웨어. HCA 펌웨어는 `mlxfwmanager`/`flint`로 별도 업그레이드:
+
+```bash
+mlxfwmanager --query
+mlxfwmanager -u -i fw-ConnectX7-rel-28_xx_xxxx.bin
+```
+
+펌웨어-MOFED 호환 매트릭스 어긋나면 HCA 링크 안 올라옴. NDR ConnectX-7은 fw 28.x 이상 권장.
+
+### DOCA-OFED로 리브랜딩 (2024+)
+
+NVIDIA는 MOFED → **DOCA-Host** (with DOCA-OFED) 로 통합. 회사 23.04 버전은 legacy MOFED, 업그레이드 시 DOCA 경로 고려.
+
 ### Network namespace와 RDMA
 - 리눅스 커널 5.3+ RDMA subsystem은 namespace 인식(`rdma system set netns exclusive`).
 - Host-Device CNI가 netlink로 `IFLA_NET_NS_FD` 보내면 커널이 해당 link와 관련 RDMA device를 타깃 netns로 이동.
@@ -499,6 +530,16 @@ A: 회사는 Pod당 HCA를 통째로 주는 단일 테넌시 모델입니다. IP
 
 **Q10. SR-IOV Network Operator와 NVIDIA Network Operator의 관계는?**
 A: NVIDIA Network Operator가 SR-IOV Network Operator를 서브차트로 포함할 수 있습니다(`sriovNetworkOperator.enabled`). SR-IOV VF 동적 생성/관리가 필요할 때 켭니다. 회사는 VF 안 써서 `false`.
+
+---
+
+## 9.5 연계 문서
+
+- CNI 커널 원리: [../kernel/cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md).
+- RDMA 하드웨어/GPUDirect: [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md).
+- Subnet Manager/RoCE: [../kernel/network-deep-dive.md](../kernel/network-deep-dive.md) §5.
+- 실제 PyTorchJob에서 사용: [mlops-stack-deep-dive.md](mlops-stack-deep-dive.md).
+- 통합: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md).
 
 ---
 

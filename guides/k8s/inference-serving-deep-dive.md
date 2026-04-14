@@ -482,4 +482,18 @@ A. (1) 팀이 MLflow에서 stage를 "Production"으로 전환. (2) CI/CD (ArgoCD
 - Triton: https://docs.nvidia.com/deeplearning/triton-inference-server/
 - vLLM: https://docs.vllm.ai/
 - PagedAttention paper: Kwon et al., SOSP 2023
-- 관련: [mlops-stack-deep-dive.md](mlops-stack-deep-dive.md), [multi-tenancy-scheduler-deep-dive.md](multi-tenancy-scheduler-deep-dive.md)
+
+### 실전 추가 고려 (면접 심화 대비)
+
+- **양자화**: FP16 → FP8(H100 transformer engine), INT8(SmoothQuant), INT4(AWQ/GPTQ). 동일 GPU에서 서빙 가능 모델 크기 2~4배.
+- **Speculative decoding**: 작은 draft 모델이 N 토큰 추정 → 큰 모델이 1 step에 검증. LLM TPOT 30~50% 개선, vLLM 0.6+ / TRT-LLM 지원.
+- **TRT-LLM backend**: Triton에서 LLM 서빙. TensorRT 엔진 빌드 필요하지만 레이턴시는 vLLM보다 빠른 경우 있음. 선택 기준: **동적 요청 유연성(vLLM) vs 최적화 빌드 레이턴시(TRT-LLM)**.
+- **Graceful shutdown**: scale-down 시 진행 중 스트림 끊기면 UX 파괴. `terminationGracePeriodSeconds` 60~120s + vLLM `--drain-request-timeout`. Istio는 `localityLbSetting.failoverPriority` 로 재시도 경로.
+
+## 14. 연계 문서
+
+- GPU/MIG/MPS 하드웨어 층: [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md), [../hw/cuda-stack-deep-dive.md](../hw/cuda-stack-deep-dive.md)
+- 모델 저장소(Ceph RGW)·MLflow: [./mlops-stack-deep-dive.md](./mlops-stack-deep-dive.md), [../hw/ceph-storage-deep-dive.md](../hw/ceph-storage-deep-dive.md)
+- 스케줄러/멀티테넌시(HPA, PriorityClass): [./multi-tenancy-scheduler-deep-dive.md](./multi-tenancy-scheduler-deep-dive.md)
+- 인증 라우팅: [./authn-authz-deep-dive.md](./authn-authz-deep-dive.md)
+- 관측(DCGM/KServe/vLLM 메트릭): [./observability-deep-dive.md](./observability-deep-dive.md)

@@ -109,6 +109,52 @@ avg_over_time(metric[5m] offset 1w)
 
 각자 자기 시스템 상태를 `/metrics` 엔드포인트로 노출. Prometheus가 긁어감.
 
+### 1.5.1 Cardinality — 관측의 가장 흔한 장애
+
+**High cardinality label = 메트릭 시스템 OOM의 1순위 원인.**
+
+```
+http_requests_total{user_id="..."}   # user_id 100만 명 → 100만 개 시계열 폭발
+http_requests_total{path="/user/{id}"} # 정규화하여 수천개로 줄임
+```
+
+- Prometheus 메모리 ≈ active 시계열 수 × ~3KB
+- 규칙: **label value는 bounded set** (status code, method OK / user_id, trace_id NO)
+- 확인: `count by(__name__)({__name__=~".+"})` / `prometheus_tsdb_symbol_table_size_bytes`
+- 격리: Trace/span id는 **exemplar**(Prometheus 2.26+)나 OTel traces로 보내고 메트릭 라벨로 쓰지 말 것
+
+### 1.5.2 Recording Rule vs Alerting Rule
+
+- **Recording rule**: 자주 쓰는 비싼 PromQL을 주기적으로 미리 계산 → 새 메트릭으로 저장. 대시보드 로딩·알람 평가 비용 절감.
+- **Alerting rule**: 조건 + `for:` 기간 → Alertmanager로.
+
+```yaml
+groups:
+- name: slm-recording
+  rules:
+  - record: job:http_error_rate5m
+    expr: sum(rate(http_requests_total{status=~"5.."}[5m])) by (job)
+       / sum(rate(http_requests_total[5m])) by (job)
+```
+
+### 1.5.3 USE / RED 방법론
+
+- **USE** (Brendan Gregg, 리소스용): Utilization / Saturation / Errors — CPU·메모리·IB 링크 같은 하드웨어
+- **RED** (Tom Wilkie, 서비스용): Rate / Errors / Duration — HTTP 서비스
+- DGX 학습 잡은 둘을 섞어: GPU(USE) + PyTorchJob step latency(RED)
+
+### 1.5.4 장기 저장 & HA (Thanos / Mimir / VictoriaMetrics)
+
+Prometheus 단일 인스턴스 = 로컬 TSDB 15일 기본. 장기/HA가 필요하면:
+
+| 솔루션 | 핵심 |
+|--------|------|
+| **Thanos** | Sidecar가 Prometheus 블록을 S3/MinIO에 업로드, Querier가 여러 Prometheus + object storage를 연합 쿼리 |
+| **Grafana Mimir** | Cortex 후속, 수평 확장 대규모 |
+| **VictoriaMetrics** | 단일 바이너리 고성능, Prometheus remote_write 호환 |
+
+회사 매니페스트에 Thanos/Mimir가 있다면 가치판단 포인트: 데이터 주권(내부 MinIO) vs 운영 복잡도.
+
 ### 1.6 K8s에서 ServiceMonitor
 
 Prometheus Operator가 추가하는 CRD.
@@ -508,6 +554,16 @@ groups:
 
 ### Q5. "알람 노이즈 줄이는 방법?"
 > "사용자 경험 기반 SLO를 정하고 그 위반에만 알람합니다. 자원 임계치(CPU 90%) 같은 것보다 '에러율 1% 5분 지속' 같은 식. for 절로 짧은 spike 무시, severity 분리(P0~P3), 자동 복구 가능한 건 알람 대신 자동화로 처리합니다."
+
+---
+
+## 11.5 연계 문서
+
+- eBPF 기반 관측 원리: [../kernel/ebpf-deep-dive.md](../kernel/ebpf-deep-dive.md)
+- 보안 관측(Falco/Audit): [./security-deep-dive.md](./security-deep-dive.md)
+- etcd/APF 등 컨트롤 플레인 메트릭: [./k8s-control-plane-deep-dive.md](./k8s-control-plane-deep-dive.md)
+- cgroup PSI·메모리 메트릭: [../kernel/cgroup-deep-dive.md](../kernel/cgroup-deep-dive.md)
+- GPU/IB 메트릭 원천: [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md), [../hw/ib-deep-dive.md](../hw/ib-deep-dive.md)
 
 ---
 

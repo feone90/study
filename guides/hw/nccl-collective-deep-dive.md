@@ -429,7 +429,23 @@ A. 순서:
 
 ---
 
-## 12. 참고
+## 11.5 2025-2026 최신 키워드 (면접 심화)
+
+- **NCCL 2.20+**: SHARPv3, NVLS+SHARP 계층적 조합, `NCCL_NCHANNELS_PER_NET_PEER` 세분화.
+- **NVSHMEM 3.x**: NCCL collective 외부에 one-sided PGAS 모델. MoE AlltoAll에서 NCCL 대비 지연↓.
+- **MSCCL / MSCCL++**: Microsoft 튜너. 커스텀 알고리즘 XML로 Ring/Tree 외 토폴로지 특화 경로 정의.
+- **RoCEv2 전환 시 차이**: TC/SL 대신 DSCP/PFC(802.1Qbb) 설정. `NCCL_IB_GID_INDEX` 재계산 필수.
+
+## 12. 연계 문서
+
+- HW 기반: [./gpu-gpudirect-deep-dive.md](./gpu-gpudirect-deep-dive.md), [./cuda-stack-deep-dive.md](./cuda-stack-deep-dive.md)
+- IB/CNI: [../kernel/rdma-ib-deep-dive.md](../kernel/rdma-ib-deep-dive.md), [../k8s/cni-multus-deep-dive.md](../k8s/cni-multus-deep-dive.md), [../k8s/nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md)
+- 학습 파이프라인: [../k8s/mlops-stack-deep-dive.md](../k8s/mlops-stack-deep-dive.md), [../integration/llm-training-workload-deep-dive.md](../integration/llm-training-workload-deep-dive.md)
+- 관측/프로파일: [../k8s/observability-deep-dive.md](../k8s/observability-deep-dive.md)
+- 허브: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md)
+- 면접 서사: [../../interview/ml-platform-ownership-guide.md](../../interview/ml-platform-ownership-guide.md)
+
+## 13. 참고
 
 - NCCL docs: https://docs.nvidia.com/deeplearning/nccl/user-guide/
 - `NCCL_IB_TIMEOUT` 공식 — IB 스펙 Section 9.7.6.1.1 (Timer interval).

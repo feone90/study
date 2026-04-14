@@ -481,4 +481,17 @@ A. (1) etcd — Pod + Workload 수 증가, compaction 중요. (2) scheduler — 
 - Kueue: https://kueue.sigs.k8s.io/
 - Volcano: https://volcano.sh/
 - Kyverno: https://kyverno.io/
-- 관련: [mlops-stack-deep-dive.md](mlops-stack-deep-dive.md), [security-deep-dive.md](security-deep-dive.md), [inference-serving-deep-dive.md](inference-serving-deep-dive.md)
+
+### 2025-2026 최신 키워드 (면접 심화)
+
+- **Topology-Aware Scheduling (Kueue TAS)**: NVLink 섬(같은 NVSwitch 도메인) / 같은 IB leaf 스위치에 Pod을 모아 배치. 멀티노드 학습 NCCL all-reduce 지연 최소화. `TopologyAwareScheduling` feature gate.
+- **DRA (Dynamic Resource Allocation, 1.32 GA)**: `nvidia.com/gpu` 정수 할당의 한계를 넘어 **ResourceClaim**으로 "H100 MIG 3g.40gb 2개 + NVLink 연결" 같은 구조적 요구 표현. NVIDIA DRA 드라이버가 구현 중.
+- **Apache YuniKorn**: Spark/Flink 중심 대안 스케줄러. HPC보단 빅데이터 multi-tenancy. 면접 대비 비교 포인트: Kueue(K8s native queue) / Volcano(HPC/AI) / YuniKorn(Big Data).
+
+## 13. 연계 문서
+
+- 스케줄러/APF/etcd 원리: [./k8s-control-plane-deep-dive.md](./k8s-control-plane-deep-dive.md)
+- 학습 잡 원천(PyTorchJob/MPIJob): [./mlops-stack-deep-dive.md](./mlops-stack-deep-dive.md), [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md)
+- 서빙 쪽 HPA/ priority: [./inference-serving-deep-dive.md](./inference-serving-deep-dive.md)
+- 정책·보안(PSA/Kyverno): [./security-deep-dive.md](./security-deep-dive.md)
+- cgroup cpuset·GPU device plugin: [../kernel/cgroup-deep-dive.md](../kernel/cgroup-deep-dive.md), [../hw/cuda-stack-deep-dive.md](../hw/cuda-stack-deep-dive.md)

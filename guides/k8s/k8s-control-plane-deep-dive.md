@@ -88,7 +88,26 @@ K8s의 핵심 패턴.
 
 폴링 안 함. 이벤트 기반. 효율적.
 
-### 2.4 백업이 절대 중요
+### 2.4 compaction & defrag (★ 운영 필수)
+
+etcd는 모든 revision을 유지 → 시간 지나면 DB 커짐, 쓰기 느려짐.
+
+```bash
+# 현재 revision 확인
+rev=$(etcdctl endpoint status --write-out=json | jq -r '.[0].Status.header.revision')
+
+# 5분 전 revision까지 compact
+etcdctl compact $rev
+
+# 공간 회수 (db 파일 shrink)
+etcdctl defrag --cluster
+```
+
+- K8s apiserver에 `--etcd-compaction-interval=5m`로 자동 compaction.
+- defrag는 멤버별 순차 실행 (leader 영향 있음).
+- DB size 8GB 이상 시 apiserver alarm `NOSPACE` 발생 → 쓰기 차단.
+
+### 2.5 백업이 절대 중요
 
 ```bash
 # etcd 백업
@@ -146,7 +165,33 @@ kubelet (각 노드)
 
 각 단계마다 거부 가능. 거부되면 바로 응답.
 
-### 3.3 Admission Controller (확장점)
+### 3.3 API Priority and Fairness (APF, v1.29 stable)
+
+대량 watch/list가 apiserver를 압도 → 이전엔 `--max-requests-inflight`로 단순 제한 → 중요 요청까지 drop.
+
+APF는 `FlowSchema` + `PriorityLevelConfiguration`로 요청을 분류·가중 처리:
+
+```yaml
+# 시스템 리더 요청은 최우선
+FlowSchema: system-leader-election → priorityLevel: leader-election
+# 컨트롤러 workqueue는 workload-high
+# 사용자 요청은 workload-low (fair queueing)
+```
+
+429 `Too Many Requests` + `X-Kubernetes-PF-FlowSchema-UID` 헤더로 어느 schema가 throttle 됐는지 진단.
+
+### 3.4 Leader Election
+
+controller-manager, scheduler는 HA를 위해 다중 인스턴스 배포 → 하나만 active.
+
+```
+leader: lease 객체(coordination.k8s.io/v1) 주기적 renew
+follower: lease TTL 만료 감시 → 만료 시 takeover 시도
+```
+
+`--leader-elect=true --leader-elect-lease-duration=15s --leader-elect-renew-deadline=10s`.
+
+### 3.5 Admission Controller (확장점)
 
 ```
 Mutating Admission Webhook → 리소스 수정 가능
@@ -600,6 +645,15 @@ journalctl -u kubelet -n 100
 
 ### Q6. "kube-scheduler의 동작은?"
 > "Filter 단계에서 자원/affinity/taint 등으로 후보 노드를 거르고, Score 단계에서 점수를 매겨 최적 노드를 선택합니다. Pod.spec.nodeName을 업데이트하면 해당 노드의 kubelet이 watch로 감지해 컨테이너를 시작합니다. nodeSelector, affinity, taint/toleration이 스케줄링을 제어하는 주요 메커니즘입니다."
+
+---
+
+## 12.5 연계 문서
+
+- 런타임 하단: [container-runtime-deep-dive.md](container-runtime-deep-dive.md), [../kernel/cgroup-deep-dive.md](../kernel/cgroup-deep-dive.md).
+- 인증/인가 상세: [authn-authz-deep-dive.md](authn-authz-deep-dive.md).
+- 스케줄러 확장: [multi-tenancy-scheduler-deep-dive.md](multi-tenancy-scheduler-deep-dive.md) (Kueue/Volcano).
+- CNI와 Pod 네트워크: [../kernel/cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md).
 
 ---
 

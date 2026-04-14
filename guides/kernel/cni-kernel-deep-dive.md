@@ -369,6 +369,40 @@ $ kubectl exec mypod -- ip link show
 3: net1@ibp64s0: ...   ← 물리 IB 카드가 통째로!
 ```
 
+### 6.45 대안: SR-IOV (공유 가능한 물리 NIC)
+
+Host-Device는 "NIC 1개 = Pod 1개" 전속. 1 물리 포트를 여러 Pod이 쓰고 싶다면 **SR-IOV**.
+
+```
+[물리 PF (Physical Function)]
+    │ PCIe SR-IOV 하드웨어 분할
+    ├── VF0 → Pod1 namespace
+    ├── VF1 → Pod2 namespace
+    └── VF2 → Pod3 namespace
+```
+
+- 각 VF는 독립된 PCI 디바이스 (`0000:40:00.1`, `.2`...) 로 노출.
+- Mellanox의 경우 `mstconfig NUM_OF_VFS=N` + `echo N > /sys/class/net/ibp64s0/device/sriov_numvfs`.
+- NVIDIA Network Operator의 `sriov-network-operator`가 자동화.
+- **트레이드오프**: 포트 대역폭/QP 수가 VF 수만큼 분할 → 고밀도 소형 워크로드 적합, 대규모 학습은 Host-Device(전속) 우위.
+- 회사는 DGX + 1:1 전속 학습이라 Host-Device 선택, 추론 서버군은 SR-IOV 고려 가능.
+
+### 6.46 GID 테이블과 NCCL_IB_GID_INDEX
+
+Host-Device로 옮겨진 IB 인터페이스도 sysfs 경로는 유지.
+
+```bash
+ls /sys/class/infiniband/mlx5_3/ports/1/gids/
+# 0, 1, 2, 3, 4, ...
+cat /sys/class/infiniband/mlx5_3/ports/1/gids/3
+# fe80:0000:0000:0000:... (GID entry 3)
+```
+
+- Index 0: 기본 LID (IB native)
+- Index 1~2: link-local IPv6
+- **Index 3: RoCEv2 UDP encap** ← 회사 설정 `NCCL_IB_GID_INDEX=3` 근거
+- `show_gids` 스크립트로 사람이 읽기 쉬운 출력 가능.
+
 ### 6.5 장단점
 
 **장점**:
@@ -535,6 +569,18 @@ spec:
 
 해석: "이 이름의 NAD를 호출하면, host-device CNI를 ibp64s0 인터페이스에 대해 실행해라."
 
+### 8.35 IPAM 플러그인 (host-local vs whereabouts)
+
+Multus 추가 인터페이스도 IP가 필요 → **IPAM CNI**가 담당.
+
+| IPAM | 범위 | 용도 |
+|---|---|---|
+| `host-local` | 노드 로컬 풀 | 단일 노드 내 Pod, 빠름. 노드 간 중복 위험 |
+| `whereabouts` | 클러스터 전역 (etcd/k8s store) | 멀티노드 중복 방지, 약간 느림 |
+| `static` | 고정 IP | StatefulSet-like 워크로드 |
+
+IB는 보통 IP 통신을 하지 않아 IPAM 불필요(annotation 만으로 충분)하지만, IPoIB 사용 시 whereabouts 권장.
+
 ### 8.4 Pod에서 사용
 
 ```yaml
@@ -637,6 +683,16 @@ metadata:
 > 우리 환경처럼 RDMA가 필요한 경우 이 경로의 오버헤드가 문제가 됩니다. 그래서 두 가지 우회를 합니다. 첫째, Host-Device CNI로 물리 IB 인터페이스를 통째로 Pod namespace로 옮겨 veth/bridge를 건너뜁니다. 둘째, RDMA 자체가 libibverbs를 통해 NIC 하드웨어를 직접 제어하므로 커널 TCP/IP 스택을 완전히 우회합니다. 이 두 우회 덕분에 GPU 메모리에서 다른 노드의 GPU 메모리로 거의 1μs 수준 지연으로 데이터가 흐를 수 있고, 이게 멀티노드 분산 학습 성능의 핵심입니다."
 
 이 정도면 네트워크/시스템 깊이 있는 면접관도 만족합니다.
+
+---
+
+## 11.5 연계 문서
+
+- 선행: [linux-fundamentals-deep-dive.md](linux-fundamentals-deep-dive.md), [network-deep-dive.md](network-deep-dive.md).
+- RDMA 하드웨어/GPUDirect 경로: [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md).
+- NicClusterPolicy로 실제 배포: [../k8s/nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md).
+- NCCL env 매트릭스: [../hw/nccl-collective-deep-dive.md](../hw/nccl-collective-deep-dive.md).
+- 통합: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md).
 
 ---
 

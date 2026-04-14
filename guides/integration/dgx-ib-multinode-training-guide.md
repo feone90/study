@@ -1242,6 +1242,52 @@ Ceph 전용:           모든 노드의 ibp24, ibp220
 
 ---
 
+## 12.5 연계 문서 (허브 지도)
+
+이 문서는 **허브**다. 주제별 심화는 자매 문서를 따라가라.
+
+### 하드웨어 계층
+
+- IB 프로토콜·SM·SHARP: [../hw/ib-deep-dive.md](../hw/ib-deep-dive.md)
+- GPU·NVLink·GPUDirect RDMA: [../hw/gpu-gpudirect-deep-dive.md](../hw/gpu-gpudirect-deep-dive.md)
+- CUDA/Driver/NVML/DCGM/MIG/MPS: [../hw/cuda-stack-deep-dive.md](../hw/cuda-stack-deep-dive.md) (ML-27 XID/과열 대응)
+- NCCL collective 알고리즘·env: [../hw/nccl-collective-deep-dive.md](../hw/nccl-collective-deep-dive.md)
+- Ceph 스토리지: [../hw/ceph-storage-deep-dive.md](../hw/ceph-storage-deep-dive.md) (MDS CAP/D-state → ML-25)
+- 병렬 FS(Lustre/Weka/GPFS 비교): [../hw/parallel-filesystem-deep-dive.md](../hw/parallel-filesystem-deep-dive.md)
+
+### 커널 계층
+
+- PCIe·네트워크 스택: [../kernel/linux-fundamentals-deep-dive.md](../kernel/linux-fundamentals-deep-dive.md), [../kernel/network-deep-dive.md](../kernel/network-deep-dive.md)
+- cgroup(rdma.max, cpuset, PSI): [../kernel/cgroup-deep-dive.md](../kernel/cgroup-deep-dive.md)
+- CNI veth/ns/GID 메커니즘: [../kernel/cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md)
+- RDMA/IB 커널 스택: [../kernel/rdma-ib-deep-dive.md](../kernel/rdma-ib-deep-dive.md)
+- 컨테이너 런타임(커널): [../kernel/container-runtime-deep-dive.md](../kernel/container-runtime-deep-dive.md)
+- eBPF(Cilium/Hubble/sched_ext): [../kernel/ebpf-deep-dive.md](../kernel/ebpf-deep-dive.md)
+
+### Kubernetes 계층
+
+- 컨트롤 플레인(etcd/APF/Lease): [../k8s/k8s-control-plane-deep-dive.md](../k8s/k8s-control-plane-deep-dive.md)
+- CNI·Multus·SR-IOV/RDMA: [../k8s/cni-multus-deep-dive.md](../k8s/cni-multus-deep-dive.md)
+- NVIDIA Network Operator(본 문서 §7 심화): [../k8s/nvidia-network-operator-deep-dive.md](../k8s/nvidia-network-operator-deep-dive.md)
+- 멀티테넌시/스케줄러(Kueue/Volcano/DRA): [../k8s/multi-tenancy-scheduler-deep-dive.md](../k8s/multi-tenancy-scheduler-deep-dive.md)
+- MLOps(Training Operator/MLflow/Airflow/Katib): [../k8s/mlops-stack-deep-dive.md](../k8s/mlops-stack-deep-dive.md)
+- 추론 서빙(KServe/Triton/vLLM/FP8): [../k8s/inference-serving-deep-dive.md](../k8s/inference-serving-deep-dive.md)
+- 인증/인가(Keycloak/Dex/Istio/SPIFFE): [../k8s/authn-authz-deep-dive.md](../k8s/authn-authz-deep-dive.md)
+- 보안(PSS/RuntimeClass/SLSA/Audit): [../k8s/security-deep-dive.md](../k8s/security-deep-dive.md)
+- 관측(Prometheus/DCGM/Thanos/USE-RED): [../k8s/observability-deep-dive.md](../k8s/observability-deep-dive.md)
+- 로깅(Fluent Bit/Loki 3.x): [../k8s/logging-pipeline-deep-dive.md](../k8s/logging-pipeline-deep-dive.md)
+
+### 학습 워크로드
+
+- LLM parallelism(DDP/FSDP/TP/PP/FP8): [./llm-training-workload-deep-dive.md](./llm-training-workload-deep-dive.md)
+
+### 면접 서사
+
+- ml-platform 오너십/ML-25·27·30/STAR: [../../interview/ml-platform-ownership-guide.md](../../interview/ml-platform-ownership-guide.md)
+- 4주 학습 커리큘럼: [../../CURRICULUM.md](../../CURRICULUM.md)
+
+---
+
 ## 13. 한 줄 요약
 
 > **"DGX 4노드의 32개 HCA를 IB 스위치에 모두 꽂아두고, NVIDIA Network Operator가 깔아주는 Multus + Host-Device CNI + RDMA Plugin으로 각 namespace에 IB 포트를 전속 할당한다. PyTorchJob은 Replica Type을 늘려 노드 확장하며, NCCL이 IB 위에서 AllReduce를 수행한다."**

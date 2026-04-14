@@ -554,4 +554,19 @@ A. (1) FAB auth manager가 `cachetools` stale 문제 해결. (2) Deferrable oper
   - `airflow/` (values.yaml, gitsync, health-monitor cronjob)
 - Confluence: 11797049(Kubeflow 가이드), 95584383(MLflow 마이그레이션), 103253781(Airflow seminar), 95912565(Harbor 마이그레이션)
 - Jira: ML-30(Airflow 복구)
-- 관련 딥다이브: [inference-serving-deep-dive.md](inference-serving-deep-dive.md), [multi-tenancy-scheduler-deep-dive.md](multi-tenancy-scheduler-deep-dive.md), [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md)
+
+### 인접 개념 (면접 심화 보강)
+
+- **Katib (Hyperparam Tuning)**: Kubeflow의 AutoML. `Experiment` CR이 `Trial` 여러 개를 PyTorchJob/MPIJob으로 스폰. Bayesian/Grid/Random. 회사 규모에서는 Optuna + Airflow로 대체해도 충분.
+- **Feast (Feature Store)**: online/offline feature 저장·제공. 온프레는 Redis(online) + Ceph(offline parquet). 면접 단골: "학습-서빙 feature skew 어떻게 방지" → Feast로 동일 정의 공유.
+- **KFP Artifact / MLMD**: Pipeline Step 간 데이터는 `OutputPath`로 명시, ML Metadata(MLMD) DB에 lineage 저장. Airflow XCom과 개념 유사하나 ML-특화.
+
+## 13. 연계 문서
+
+- 학습 하드웨어·CNI 기반: [../integration/dgx-ib-multinode-training-guide.md](../integration/dgx-ib-multinode-training-guide.md), [../kernel/cni-kernel-deep-dive.md](../kernel/cni-kernel-deep-dive.md)
+- 서빙·모델 배포: [./inference-serving-deep-dive.md](./inference-serving-deep-dive.md)
+- 스케줄러·quota·priority: [./multi-tenancy-scheduler-deep-dive.md](./multi-tenancy-scheduler-deep-dive.md)
+- 인증/Keycloak/Harbor OIDC: [./authn-authz-deep-dive.md](./authn-authz-deep-dive.md)
+- 스토리지 원천(Ceph RGW·RBD): [../hw/ceph-storage-deep-dive.md](../hw/ceph-storage-deep-dive.md)
+- 관측·로그: [./observability-deep-dive.md](./observability-deep-dive.md), [./logging-pipeline-deep-dive.md](./logging-pipeline-deep-dive.md)
+- ML-30 오너십 서사: [../../interview/ml-platform-ownership-guide.md](../../interview/ml-platform-ownership-guide.md)
